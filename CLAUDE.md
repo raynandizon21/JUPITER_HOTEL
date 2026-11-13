@@ -26,15 +26,17 @@ To check for dead code, run `npx tsc --noEmit --noUnusedLocals --noUnusedParamet
 
 ## Data
 
-- **The app is web-only.** Everything is saved in the browser's **localStorage** under these keys (see `src/App.tsx`):
-  - `hotel_reservations_v2` — bookings with their `charges[]` and `payments[]`
-  - `hotel_settlements_v1` — Jupiter → hotel payments per month
-  - `hotel_casino_rates_v2` — room rates and voucher prices
-  - `hotel_language_v2`
+- **Data is saved in MySQL** (DB `jupiter_hotel`) through the Node backend `server/index.js`. The app calls `/api` via `src/utils/api.ts`:
+  - `GET /api/state` loads rates, bookings (with charges and payments) and payments to the hotel on startup;
+  - `PUT/DELETE /api/reservations/:id` (id = `CONFIRM_NUM`; delete sets `ACTIVE = 0`), `PUT /api/settlements/:month`, `PUT /api/rates`.
+  - The pages still use plain React state. Effects in `src/App.tsx` diff each change against what the server has and send only what changed.
+  - Only the language (`hotel_language_v2`) stays in localStorage. Old browser data (`hotel_reservations_v2`, `hotel_settlements_v1`, `hotel_casino_rates_v2`) is moved into MySQL once by `importLocalData`, then removed.
+  - There is no login yet: `BOOKED_BY` / `CREATED_BY` use the seeded `system` user (IDNo 1).
 - The app starts **empty**: there is no sample or demo data. The **Clear data** sidebar button is hidden (pass `onClearData` to `Sidebar` to show it again).
-- **MySQL schema** is in `database/schema.sql` (DB `Jupiter_hotel`, 7 tables). `scripts/init-db.mjs` applies it on `npm run dev` using the `DB_*` values in `.env`.
+- **MySQL schema** is in `database/schema.sql` (7 tables). `scripts/init-db.mjs` applies it on `npm run dev` using the `DB_*` values in `.env`.
   - It only uses `CREATE … IF NOT EXISTS` and `INSERT IGNORE`, so it is safe to re-run.
-  - Nothing in the web app reads from or writes to MySQL yet.
+  - Columns added later (`booking.CURRENCY`, `booking.IS_JUPITER_GUEST`) are added by `ensureColumns` in `server/index.js` when the backend starts.
+- **Dev:** run the backend too (`node --env-file=.env server/index.js`); Vite proxies `/api` to `API_PORT`.
 - Old saved bookings are upgraded on load by `migrateReservation` (`src/utils/billing.ts`). Keep that function working when you change the `Reservation` shape.
 
 ## Domain rules (do not break)

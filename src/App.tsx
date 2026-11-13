@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { DailyDashboard } from './components/DailyDashboard';
 import { DailySettlement } from './components/DailySettlement';
@@ -11,14 +11,55 @@ import jupiterLogo from './logo.jpg';
 import { Home as HomeIcon, Plus } from 'lucide-react';
 import { Toaster, toast } from './components/ui';
 import { ActiveModule, CasinoRatesConfig, FolioCharge, Reservation, Settlement } from './types/hotel';
-import { migrateReservation } from './utils/billing';
+import { migrateReservation, syncStatus } from './utils/billing';
+import { api, ServerState } from './utils/api';
 import { defaultCasinoRates } from './data/initialData';
 import { Language } from './i18n/translations';
 
+// Old browser-only data keys: read once and moved into MySQL (see importLocalData).
 const STORAGE_KEY_CASINO_RATES = 'hotel_casino_rates_v2';
 const STORAGE_KEY_RESERVATIONS = 'hotel_reservations_v2';
 const STORAGE_KEY_LANGUAGE = 'hotel_language_v2';
 const STORAGE_KEY_SETTLEMENTS = 'hotel_settlements_v1';
+
+const readLocal = <T,>(key: string): T | null => {
+  try {
+    const saved = localStorage.getItem(key);
+    return saved ? (JSON.parse(saved) as T) : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Before the database, data lived only in this browser's localStorage. Send anything the
+ * server doesn't have yet, then remove the old keys. Returns a short summary, or '' if nothing moved.
+ */
+async function importLocalData(server: ServerState): Promise<string> {
+  const localRes = (readLocal<Reservation[]>(STORAGE_KEY_RESERVATIONS) || []).map(migrateReservation);
+  const localSettle = readLocal<Settlement[]>(STORAGE_KEY_SETTLEMENTS) || [];
+  const localRates = readLocal<CasinoRatesConfig>(STORAGE_KEY_CASINO_RATES);
+  if (!localRes.length && !localSettle.length && !localRates) return '';
+
+  const have = new Set(server.reservations.map((r) => r.id));
+  const newRes = localRes.filter((r) => !have.has(r.id));
+  const haveMonths = new Set(server.settlements.map((s) => s.month));
+  const newSettle = localSettle.filter((s) => s.payments.length && !haveMonths.has(s.month));
+
+  for (const r of newRes) await api.saveReservation(r);
+  for (const s of newSettle) await api.saveSettlement(s.month, s.payments);
+  // Rates edited in this browser win only while the database has no bookings yet.
+  if (localRates && !server.reservations.length) await api.saveRates(localRates);
+
+  for (const key of [STORAGE_KEY_RESERVATIONS, STORAGE_KEY_SETTLEMENTS, STORAGE_KEY_CASINO_RATES]) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      /* ignore */
+    }
+  }
+  return newRes.length || newSettle.length ? `${newRes.length} booking(s), ${newSettle.length} month(s) of hotel payments` : '';
+}
 
 export default function App() {
   // 1. Language State (DEFAULT: English 'en' with PH / KOR flags)
@@ -37,50 +78,113 @@ export default function App() {
     localStorage.setItem(STORAGE_KEY_LANGUAGE, language);
   }, [language]);
 
-  // 2. Casino Room Rates (Image 2) State with LocalStorage
-  const [casinoRates, setCasinoRates] = useState<CasinoRatesConfig>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_CASINO_RATES);
-      if (saved) return JSON.parse(saved);
-    } catch (e) {
-      console.error(e);
-    }
-    return defaultCasinoRates;
-  });
-
-  // Reservations State with LocalStorage
-  const [reservations, setReservations] = useState<Reservation[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_RESERVATIONS);
-      if (saved) return (JSON.parse(saved) as Reservation[]).map(migrateReservation);
-    } catch (e) {
-      console.error(e);
-    }
-    return []; // start empty — no sample bookings
-  });
-
+  // 2. Data — saved in MySQL through the backend (src/utils/api.ts).
+  //    The pages keep using plain React state; the effects below send every change to the server.
+  const [casinoRates, setCasinoRates] = useState<CasinoRatesConfig>(defaultCasinoRates);
+  const [reservations, setReservations] = useState<Reservation[]>([]);
   // Payments Jupiter makes to the hotel, per reference month
-  const [settlements, setSettlements] = useState<Settlement[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_SETTLEMENTS);
-      if (saved) return JSON.parse(saved);
-    } catch (e) {
-      console.error(e);
+  const [settlements, setSettlements] = useState<Settlement[]>([]);
+  const [dbStatus, setDbStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+
+  // What the server already has (JSON per id / month), so only real changes are sent.
+  const syncedRes = useRef(new Map<string, string>());
+  const syncedSettle = useRef(new Map<string, string>());
+  const syncedRates = useRef('');
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        let state = await api.loadState();
+        // One-time move of bookings saved in this browser (before the database) into MySQL.
+        const imported = await importLocalData(state);
+        if (imported) state = await api.loadState();
+        if (cancelled) return;
+        const res = state.reservations.map((r) => syncStatus(migrateReservation(r)));
+        syncedRes.current = new Map(res.map((r) => [r.id, JSON.stringify(r)]));
+        syncedSettle.current = new Map(state.settlements.map((s) => [s.month, JSON.stringify(s.payments)]));
+        const rates = state.rates.rooms.length ? state.rates : defaultCasinoRates;
+        syncedRates.current = JSON.stringify(rates);
+        setReservations(res);
+        setSettlements(state.settlements);
+        setCasinoRates(rates);
+        setDbStatus('ready');
+        if (imported) toast(language === 'en' ? 'Saved data moved to the database' : '저장된 데이터를 DB로 옮겼습니다', `${imported}`, 'info');
+      } catch (e) {
+        console.error(e);
+        if (cancelled) return;
+        setDbStatus('error');
+        toast(
+          language === 'en' ? 'Cannot reach the database' : '데이터베이스에 연결할 수 없습니다',
+          language === 'en' ? 'Changes will not be saved. Reload the page.' : '변경 사항이 저장되지 않습니다. 새로고침하세요.',
+          'bad'
+        );
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const syncFailed = (e: unknown) => {
+    console.error(e);
+    toast(language === 'en' ? 'Not saved to the database' : 'DB 저장 실패', e instanceof Error ? e.message : String(e), 'bad');
+  };
+
+  useEffect(() => {
+    if (dbStatus !== 'ready') return;
+    const seen = new Set<string>();
+    for (const r of reservations) {
+      seen.add(r.id);
+      const json = JSON.stringify(r);
+      if (syncedRes.current.get(r.id) === json) continue;
+      syncedRes.current.set(r.id, json);
+      api.saveReservation(r).catch((e) => {
+        syncedRes.current.delete(r.id); // retry on the next change
+        syncFailed(e);
+      });
     }
-    return [];
-  });
+    for (const id of [...syncedRes.current.keys()]) {
+      if (seen.has(id)) continue;
+      syncedRes.current.delete(id);
+      api.deleteReservation(id).catch(syncFailed);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reservations, dbStatus]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_SETTLEMENTS, JSON.stringify(settlements));
-  }, [settlements]);
+    if (dbStatus !== 'ready') return;
+    const seen = new Set<string>();
+    for (const s of settlements) {
+      seen.add(s.month);
+      const json = JSON.stringify(s.payments);
+      if (syncedSettle.current.get(s.month) === json) continue;
+      syncedSettle.current.set(s.month, json);
+      api.saveSettlement(s.month, s.payments).catch((e) => {
+        syncedSettle.current.delete(s.month);
+        syncFailed(e);
+      });
+    }
+    for (const month of [...syncedSettle.current.keys()]) {
+      if (seen.has(month)) continue;
+      syncedSettle.current.delete(month);
+      api.saveSettlement(month, []).catch(syncFailed);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settlements, dbStatus]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_CASINO_RATES, JSON.stringify(casinoRates));
-  }, [casinoRates]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_RESERVATIONS, JSON.stringify(reservations));
-  }, [reservations]);
+    if (dbStatus !== 'ready') return;
+    const json = JSON.stringify(casinoRates);
+    if (syncedRates.current === json) return;
+    syncedRates.current = json;
+    api.saveRates(casinoRates).catch((e) => {
+      syncedRates.current = '';
+      syncFailed(e);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [casinoRates, dbStatus]);
 
   // 3. Navigation State
   const [activeModule, setActiveModule] = useState<ActiveModule>('dashboard');

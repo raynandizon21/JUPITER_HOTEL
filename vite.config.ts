@@ -12,6 +12,8 @@ export default defineConfig(() => {
       },
     },
     server: {
+      // The app calls /api; in dev, forward it to the Node backend (server/index.js).
+      proxy: { '/api': `http://localhost:${process.env.API_PORT || 4020}` },
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',

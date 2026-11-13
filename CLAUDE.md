@@ -20,6 +20,8 @@ npm run lint      # tsc --noEmit — run after every change
 npm run build     # production build
 ```
 
+**Production (PM2):** `npm run build && pm2 start ecosystem.config.cjs && pm2 save`. One process, `JupiterHotel-Backend` (`server/index.js`, port 4020), serves `dist/` plus `/api` (`/api/health` checks MySQL). After a frontend change: `npm run build && pm2 restart JupiterHotel-Backend`.
+
 To check for dead code, run `npx tsc --noEmit --noUnusedLocals --noUnusedParameters`. It should print nothing.
 
 ## Data
@@ -86,6 +88,7 @@ To check for dead code, run `npx tsc --noEmit --noUnusedLocals --noUnusedParamet
 | `src/components/RateCalculator.tsx` | Night-by-night quote → book |
 | `src/utils/excelExport.ts` | Monthly settlement + daily settlement `.xlsx` |
 | `database/schema.sql`, `scripts/init-db.mjs` | MySQL schema + auto-setup |
+| `server/index.js`, `ecosystem.config.cjs` | Express backend (serves `dist/` + `/api`) and its PM2 config |
 
 ## Working style
 

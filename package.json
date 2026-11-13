@@ -16,7 +16,9 @@
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.1",
     "exceljs": "^4.4.0",
+    "express": "^5.3.0",
     "lucide-react": "^0.546.0",
+    "mysql2": "^3.24.6",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "vite": "^8.3.0"
@@ -26,7 +28,6 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "esbuild": "^0.28.0",
-    "mysql2": "^3.24.6",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2"
   }

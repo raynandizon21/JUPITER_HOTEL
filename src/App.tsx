@@ -190,23 +190,6 @@ export default function App() {
           collapsed={sidebarCollapsed}
           setCollapsed={setSidebarCollapsed}
           language={language}
-          onClearData={() => {
-            const en = language === 'en';
-            if (
-              !confirm(
-                en
-                  ? 'Delete ALL saved data in this browser?\n\nBookings, guest bills, payments to hotel and room rates will be removed. This cannot be undone.'
-                  : '이 브라우저에 저장된 모든 데이터를 삭제하시겠습니까?\n\n예약, 청구서, 호텔 지급 내역, 객실 요금이 삭제됩니다. 되돌릴 수 없습니다.'
-              )
-            )
-              return;
-            try {
-              localStorage.clear();
-            } catch {
-              /* ignore */
-            }
-            location.reload();
-          }}
         />
 
         <main className="flex-1 min-w-0 overflow-y-auto rounded-2xl">

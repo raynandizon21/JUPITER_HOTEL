@@ -31,7 +31,7 @@ To check for dead code, run `npx tsc --noEmit --noUnusedLocals --noUnusedParamet
   - `hotel_settlements_v1` — Jupiter → hotel payments per month
   - `hotel_casino_rates_v2` — room rates and voucher prices
   - `hotel_language_v2`
-- The app starts **empty**: there is no sample or demo data. **Clear data** in the sidebar wipes localStorage.
+- The app starts **empty**: there is no sample or demo data. The **Clear data** sidebar button is hidden (pass `onClearData` to `Sidebar` to show it again).
 - **MySQL schema** is in `database/schema.sql` (DB `Jupiter_hotel`, 7 tables). `scripts/init-db.mjs` applies it on `npm run dev` using the `DB_*` values in `.env`.
   - It only uses `CREATE … IF NOT EXISTS` and `INSERT IGNORE`, so it is safe to re-run.
   - Nothing in the web app reads from or writes to MySQL yet.
@@ -78,7 +78,7 @@ To check for dead code, run `npx tsc --noEmit --noUnusedLocals --noUnusedParamet
 
 | Path | Purpose |
 |---|---|
-| `src/App.tsx` | Layout, top bar, state + localStorage, New Booking flow, Clear data |
+| `src/App.tsx` | Layout, top bar, state + localStorage, New Booking flow |
 | `src/components/DailyDashboard.tsx` | Dashboard (monthly settlement, payments to hotel, guest balances; embeds Daily Settlement) |
 | `src/components/DailySettlement.tsx` | Daily table, guest / in-house pop-ups, `Pager` |
 | `src/components/GuestReservationLedger.tsx` | Ledger table + New/Edit reservation form with confirm step |

@@ -9,7 +9,8 @@ interface SidebarProps {
   collapsed: boolean;
   setCollapsed: (collapsed: boolean) => void;
   language: Language;
-  onClearData: () => void;
+  /** Shows the "Clear data" button when set (hidden in production). */
+  onClearData?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ activeModule, setActiveModule, collapsed, setCollapsed, language, onClearData }) => {
@@ -76,14 +77,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeModule, setActiveModule,
       </nav>
 
       <div className="p-3 border-t border-line space-y-2">
-        <button
-          onClick={onClearData}
-          title={en ? 'Clear all saved data' : '저장된 데이터 모두 삭제'}
-          className={`w-full h-10 rounded-[10px] border border-bad-line text-bad bg-bad-soft/60 hover:bg-bad-soft flex items-center justify-center gap-2.5 text-[13px] font-medium transition-colors cursor-pointer`}
-        >
-          <Trash2 className="w-4 h-4" />
-          {!collapsed && (en ? 'Clear data' : '데이터 삭제')}
-        </button>
+        {onClearData && (
+          <button
+            onClick={onClearData}
+            title={en ? 'Clear all saved data' : '저장된 데이터 모두 삭제'}
+            className={`w-full h-10 rounded-[10px] border border-bad-line text-bad bg-bad-soft/60 hover:bg-bad-soft flex items-center justify-center gap-2.5 text-[13px] font-medium transition-colors cursor-pointer`}
+          >
+            <Trash2 className="w-4 h-4" />
+            {!collapsed && (en ? 'Clear data' : '데이터 삭제')}
+          </button>
+        )}
         <button
           onClick={() => setCollapsed(!collapsed)}
           className="w-full h-10 rounded-[10px] bg-canvas hover:bg-line flex items-center justify-center gap-2.5 text-[13px] text-ink-2 transition-colors cursor-pointer"

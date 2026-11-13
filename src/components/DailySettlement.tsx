@@ -4,7 +4,7 @@ import { CasinoRatesConfig, Reservation, VoucherSale } from '../types/hotel';
 import { folioOf, peso, voucherTotals } from '../utils/billing';
 import { formatLongDate, formatMonth, formatDateRange, getDaysInMonth, getDayCategory } from '../utils/hotelHelpers';
 import { Language } from '../i18n/translations';
-import { PageHeader, Dialog, MonthSelect, MONTHS, toast } from './ui';
+import { PageHeader, Dialog, MonthSelect, MONTHS, Pager, toast } from './ui';
 import { GuestFolio, FolioStatusBadge } from './GuestFolio';
 
 interface Props {
@@ -645,38 +645,5 @@ const MiniStat: React.FC<{ label: string; value: number; sub?: string; tone?: 'o
     <div className="text-[11.5px] text-muted">{label}</div>
     <div className={`num text-[20px] font-semibold leading-tight ${tone === 'ok' ? 'text-ok' : tone === 'info' ? 'text-info' : 'text-ink'}`}>{value}</div>
     {sub && <div className="text-[11px] text-muted">{sub}</div>}
-  </div>
-);
-
-const Pager: React.FC<{ page: number; pages: number; total: number; size: number; onPage: (p: number) => void; en: boolean; unitLabel?: string }> = ({
-  page,
-  pages,
-  total,
-  size,
-  onPage,
-  en,
-  unitLabel = '',
-}) => (
-  <div className="px-5 py-3 border-t border-line flex items-center justify-between text-[12.5px]">
-    <span className="text-muted num">
-      {page * size + 1}–{Math.min(total, page * size + size)} {en ? 'of' : '/'} {total} {unitLabel}
-    </span>
-    <div className="flex items-center gap-1">
-      <button onClick={() => onPage(page - 1)} disabled={page === 0} className="icon-btn disabled:opacity-30" aria-label="Previous page">
-        <ChevronLeft className="w-4 h-4" />
-      </button>
-      {Array.from({ length: pages }, (_, i) => (
-        <button
-          key={i}
-          onClick={() => onPage(i)}
-          className={`min-w-[28px] h-7 px-2 rounded-lg num cursor-pointer ${i === page ? 'bg-ink text-white font-semibold' : 'text-ink-2 hover:bg-canvas'}`}
-        >
-          {i + 1}
-        </button>
-      ))}
-      <button onClick={() => onPage(page + 1)} disabled={page >= pages - 1} className="icon-btn disabled:opacity-30" aria-label="Next page">
-        <ChevronRight className="w-4 h-4" />
-      </button>
-    </div>
   </div>
 );

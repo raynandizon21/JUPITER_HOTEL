@@ -1,11 +1,11 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Reservation, CasinoRatesConfig, PaymentStatus, VoucherSale } from '../types/hotel';
 import { getReferenceMonth, exportToCSV, getNightlyRates, addDays, formatLongDate, formatMonth, formatDateRange } from '../utils/hotelHelpers';
-import { Plus, Search, Download, Pencil, Trash2, Sparkles, Receipt, Ticket } from 'lucide-react';
+import { Plus, Search, Download, Pencil, Trash2, Sparkles, Receipt, Ticket, BedDouble } from 'lucide-react';
 import { GuestFolio, FolioStatusBadge } from './GuestFolio';
 import { folioOf, syncStatus, uid, peso, todayISO, voucherTotals } from '../utils/billing';
 import { Language, translations } from '../i18n/translations';
-import { PageHeader, Dialog, ConfirmDialog, MonthSelect, MONTHS, toast } from './ui';
+import { PageHeader, Dialog, ConfirmDialog, MonthSelect, MONTHS, Pager, toast } from './ui';
 import { VoucherSaleForm } from './VoucherSaleForm';
 import { StayBreakdown } from './StayBreakdown';
 
@@ -32,6 +32,8 @@ interface GuestReservationLedgerProps {
   onVoucherCreated?: (v: VoucherSale) => void;
   /** Row to highlight (newly added booking). */
   highlightId?: string | null;
+  /** Tab to show when the ledger opens (e.g. after a voucher purchase from New Booking). */
+  initialTab?: 'rooms' | 'vouchers';
 }
 
 export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
@@ -50,6 +52,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
   onCreated,
   onVoucherCreated,
   highlightId,
+  initialTab,
 }) => {
   const t = translations[language];
   const [searchTerm, setSearchTerm] = useState('');
@@ -60,6 +63,8 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
   const [formKind, setFormKind] = useState<'room' | 'voucher'>('room');
   const [editingVoucher, setEditingVoucher] = useState<VoucherSale | null>(null);
   const [deletingVoucher, setDeletingVoucher] = useState<VoucherSale | null>(null);
+  // Ledger tabs: room bookings / voucher-only purchases
+  const [tab, setTab] = useState<'rooms' | 'vouchers'>(initialTab ?? 'rooms');
 
   // Form State
   const [formGuestName, setFormGuestName] = useState('');
@@ -127,6 +132,10 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
     setAmountTouched(false);
     setConfirming(false);
     setIsModalOpen(true);
+  };
+  const openAddVoucher = () => {
+    openAddModal();
+    setFormKind('voucher');
   };
   useEffect(() => {
     if (autoOpenNew) {
@@ -307,6 +316,29 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
     );
   }, [voucherSales, selectedMonth, searchTerm]);
 
+  // Pagination (no inner scrolling): rows per page is picked under the table.
+  const [pageSize, setPageSize] = useState(10);
+  const [roomPage, setRoomPage] = useState(0);
+  const [voucherPage, setVoucherPage] = useState(0);
+  useEffect(() => {
+    setRoomPage(0);
+    setVoucherPage(0);
+  }, [selectedMonth, searchTerm, statusFilter]);
+  const roomPages = Math.max(1, Math.ceil(filteredReservations.length / pageSize));
+  const voucherPages = Math.max(1, Math.ceil(monthVouchers.length / pageSize));
+  const safeRoomPage = Math.min(roomPage, roomPages - 1);
+  const safeVoucherPage = Math.min(voucherPage, voucherPages - 1);
+  const pagedReservations = filteredReservations.slice(safeRoomPage * pageSize, safeRoomPage * pageSize + pageSize);
+  const pagedVouchers = monthVouchers.slice(safeVoucherPage * pageSize, safeVoucherPage * pageSize + pageSize);
+
+  // a newly added booking opens on the page that holds it
+  useEffect(() => {
+    if (!flashId) return;
+    const idx = filteredReservations.findIndex((r) => r.id === flashId);
+    if (idx >= 0) setRoomPage(Math.floor(idx / pageSize));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flashId]);
+
   const en = language === 'en';
   return (
     <div>
@@ -319,6 +351,29 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
       />
 
       <div className="card overflow-hidden">
+        <div className="flex items-end gap-1 px-5 pt-3 border-b border-line" role="tablist">
+          {(
+            [
+              // tone: icon colour always; underline + count bubble when active
+              { key: 'rooms', label: en ? 'Room bookings' : '객실 예약', count: filteredReservations.length, Icon: BedDouble, icon: 'text-accent', line: 'border-accent', chip: 'bg-accent text-white' },
+              { key: 'vouchers', label: en ? 'Voucher purchases' : '바우처 구매', count: monthVouchers.length, Icon: Ticket, icon: 'text-warn', line: 'border-warn', chip: 'bg-warn text-white' },
+            ] as const
+          ).map(({ key, label, count, Icon, icon, line, chip }) => (
+            <button
+              key={key}
+              role="tab"
+              aria-selected={tab === key}
+              onClick={() => setTab(key)}
+              className={`-mb-px flex items-center gap-2 px-3.5 py-2.5 text-[13px] font-medium border-b-2 cursor-pointer transition-colors ${
+                tab === key ? `${line} text-ink` : 'border-transparent text-muted hover:text-ink-2'
+              }`}
+            >
+              <Icon className={`w-4 h-4 ${icon}`} strokeWidth={1.75} />
+              {label}
+              <span className={`num text-[11px] px-1.5 h-5 min-w-5 inline-grid place-items-center rounded-full ${tab === key ? chip : 'bg-canvas text-muted'}`}>{count}</span>
+            </button>
+          ))}
+        </div>
         <div className="card-head flex-col md:flex-row md:items-center items-stretch">
           <div className="flex flex-wrap items-center gap-2 flex-1">
             <div className="relative flex-1 min-w-[200px] max-w-xs">
@@ -332,25 +387,31 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
               />
             </div>
             <MonthSelect value={selectedMonth} onChange={setSelectedMonth} months={MONTHS} allLabel={t.allMonths} />
-            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)} className="input input-sm w-auto min-w-[150px]">
-              <option value="all">{t.filterAll} ({filteredReservations.length})</option>
-              <option value="결제완료">{t.filterPaid}</option>
-              <option value="미결제">{t.filterUnpaid}</option>
-            </select>
+            {tab === 'rooms' && (
+              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)} className="input input-sm w-auto min-w-[150px]">
+                <option value="all">{t.filterAll} ({filteredReservations.length})</option>
+                <option value="결제완료">{t.filterPaid}</option>
+                <option value="미결제">{t.filterUnpaid}</option>
+              </select>
+            )}
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => exportToCSV(filteredReservations)} className="btn btn-outline">
-              <Download className="w-3.5 h-3.5" />
-              {t.btnExportCSV}
-            </button>
-            <button onClick={openAddModal} className="btn btn-primary">
+            {tab === 'rooms' && (
+              <button onClick={() => exportToCSV(filteredReservations)} className="btn btn-outline">
+                <Download className="w-3.5 h-3.5" />
+                {t.btnExportCSV}
+              </button>
+            )}
+            <button onClick={tab === 'rooms' ? openAddModal : openAddVoucher} className="btn btn-primary">
               <Plus className="w-4 h-4" />
-              {t.btnNewReservation}
+              {tab === 'rooms' ? t.btnNewReservation : en ? 'New voucher purchase' : '바우처 구매'}
             </button>
           </div>
         </div>
 
-        <div className="overflow-x-auto max-h-[680px]">
+        {tab === 'rooms' ? (
+        <>
+        <div className="overflow-x-auto">
           <table className="dtable">
             <thead>
               <tr>
@@ -378,7 +439,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                   </td>
                 </tr>
               ) : (
-                filteredReservations.map((res) => (
+                pagedReservations.map((res) => (
                   <tr key={res.id} id={`row-${res.id}`} className={`group ${flashId === res.id ? 'row-new' : ''}`}>
                     <td>
                       <div className="flex items-center gap-2.5">
@@ -419,21 +480,13 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
             </tbody>
           </table>
         </div>
-      </div>
-
-      {monthVouchers.length > 0 && (
-        <div className="card overflow-hidden mt-4">
-          <div className="card-head">
-            <div>
-              <h3 className="card-title flex items-center gap-2.5">
-                <span className="w-7 h-7 rounded-[8px] bg-warn text-white grid place-items-center">
-                  <Ticket className="w-4 h-4" strokeWidth={1.75} />
-                </span>
-                {en ? 'Voucher purchases' : '바우처 구매'} · {formatMonth(selectedMonth)}
-              </h3>
-              <p className="text-[12.5px] text-muted mt-1">{en ? 'Vouchers bought without a room booking — for the record' : '객실 예약 없이 구매한 바우처 (기록용)'}</p>
-            </div>
-          </div>
+        {filteredReservations.length > 0 && (
+          <Pager page={safeRoomPage} pages={roomPages} total={filteredReservations.length} size={pageSize} onPage={setRoomPage} onSize={setPageSize} en={en} unitLabel={en ? 'bookings' : '건'} />
+        )}
+        </>
+        ) : (
+        <>
+        <div className="overflow-x-auto">
           <table className="dtable">
             <thead>
               <tr>
@@ -447,7 +500,18 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
               </tr>
             </thead>
             <tbody>
-              {monthVouchers.map((v) => {
+              {monthVouchers.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="!py-16 text-center">
+                    <div className="text-[13px] text-muted">{en ? 'No voucher purchases this month.' : '이번 달 바우처 구매 내역이 없습니다.'}</div>
+                    <button onClick={openAddVoucher} className="btn btn-outline btn-sm mt-3">
+                      <Plus className="w-3.5 h-3.5" />
+                      {en ? 'New voucher purchase' : '바우처 구매'}
+                    </button>
+                  </td>
+                </tr>
+              )}
+              {pagedVouchers.map((v) => {
                 const f = voucherTotals(v);
                 return (
                   <tr key={v.id}>
@@ -484,7 +548,12 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
             </tbody>
           </table>
         </div>
-      )}
+        {monthVouchers.length > 0 && (
+          <Pager page={safeVoucherPage} pages={voucherPages} total={monthVouchers.length} size={pageSize} onPage={setVoucherPage} onSize={setPageSize} en={en} unitLabel={en ? 'purchases' : '건'} />
+        )}
+        </>
+        )}
+      </div>
 
       </>
       )}
@@ -568,6 +637,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                 setVoucherSales((prev) => [v, ...prev]);
                 toast(en ? 'Voucher purchase saved' : '바우처 구매 저장됨', `${v.guestName} · ${peso(voucherTotals(v).total)}`);
                 setSelectedMonth(v.date.slice(0, 7));
+                setTab('vouchers');
                 setIsModalOpen(false);
                 onVoucherCreated?.(v);
               }}

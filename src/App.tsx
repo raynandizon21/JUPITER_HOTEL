@@ -259,6 +259,7 @@ export default function App() {
   // "New Booking" opens the form on top of the current page; after saving we go to the ledger and highlight the row
   const [bookingOpen, setBookingOpen] = useState(false);
   const [highlightId, setHighlightId] = useState<string | null>(null);
+  const [ledgerTab, setLedgerTab] = useState<'rooms' | 'vouchers'>('rooms');
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-canvas text-ink flex flex-col p-3 gap-3">
@@ -279,9 +280,13 @@ export default function App() {
           onCreated={(r) => {
             setSelectedMonth(r.referenceMonth);
             setHighlightId(r.id);
+            setLedgerTab('rooms');
             setActiveModule('ledger');
           }}
-          onVoucherCreated={() => setActiveModule('ledger')}
+          onVoucherCreated={() => {
+            setLedgerTab('vouchers');
+            setActiveModule('ledger');
+          }}
         />
       )}
       {/* Floating top bar */}
@@ -395,6 +400,8 @@ export default function App() {
 
             {activeModule === 'ledger' && (
               <GuestReservationLedger
+                key={ledgerTab}
+                initialTab={ledgerTab}
                 highlightId={highlightId}
                 reservations={reservations}
                 setReservations={setReservations}

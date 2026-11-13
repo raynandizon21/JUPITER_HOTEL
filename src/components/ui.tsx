@@ -1,5 +1,5 @@
 import React from 'react';
-import { MoreVertical, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, MoreVertical, X } from 'lucide-react';
 import { formatMonth } from '../utils/hotelHelpers';
 
 export const PageHeader: React.FC<{
@@ -196,4 +196,67 @@ export const ConfirmDialog: React.FC<{
       </button>
     </div>
   </Dialog>
+);
+
+/**
+ * Page numbers under a table. With `onSize`, also shows a page-length picker (rows per page).
+ * Tables paginate instead of scrolling inside the card.
+ */
+export const Pager: React.FC<{
+  page: number;
+  pages: number;
+  total: number;
+  size: number;
+  onPage: (p: number) => void;
+  en: boolean;
+  unitLabel?: string;
+  onSize?: (n: number) => void;
+  sizes?: number[];
+}> = ({ page, pages, total, size, onPage, en, unitLabel = '', onSize, sizes = [10, 25, 50] }) => (
+  <div className="px-5 py-3 border-t border-line flex items-center justify-between gap-3 text-[12.5px]">
+    <div className="flex items-center gap-3">
+      <span className="text-muted num">
+        {total === 0 ? 0 : page * size + 1}–{Math.min(total, page * size + size)} {en ? 'of' : '/'} {total} {unitLabel}
+      </span>
+      {onSize && (
+        <label className="flex items-center gap-1.5 text-muted">
+          {en ? 'Show' : '표시'}
+          <select
+            value={size}
+            onChange={(e) => {
+              onSize(Number(e.target.value));
+              onPage(0);
+            }}
+            className="input input-sm !h-7 !w-auto !py-0 pr-7"
+          >
+            {sizes.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+          {en ? 'per page' : '개씩'}
+        </label>
+      )}
+    </div>
+    {pages > 1 && (
+      <div className="flex items-center gap-1">
+        <button onClick={() => onPage(page - 1)} disabled={page === 0} className="icon-btn disabled:opacity-30" aria-label="Previous page">
+          <ChevronLeft className="w-4 h-4" />
+        </button>
+        {Array.from({ length: pages }, (_, i) => (
+          <button
+            key={i}
+            onClick={() => onPage(i)}
+            className={`min-w-[28px] h-7 px-2 rounded-lg num cursor-pointer ${i === page ? 'bg-ink text-white font-semibold' : 'text-ink-2 hover:bg-canvas'}`}
+          >
+            {i + 1}
+          </button>
+        ))}
+        <button onClick={() => onPage(page + 1)} disabled={page >= pages - 1} className="icon-btn disabled:opacity-30" aria-label="Next page">
+          <ChevronRight className="w-4 h-4" />
+        </button>
+      </div>
+    )}
+  </div>
 );

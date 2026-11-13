@@ -1,0 +1,68 @@
+import { CasinoRatesConfig } from '../types/hotel';
+
+// Exact rates from Image 2 (WEEKDAYS CASINO RATE, WEEKEND CASINO RATE, VOUCHERS)
+export const defaultCasinoRates: CasinoRatesConfig = {
+  rooms: [
+    {
+      id: 'guest_room',
+      name: 'GUEST ROOM',
+      singleDoubleWeekday: 6050,
+      tripleWeekday: 7700,
+      singleDoubleWeekend: 6600,
+      tripleWeekend: 8250,
+    },
+    {
+      id: 'guest_room_pool_view',
+      name: 'GUEST ROOM POOL VIEW',
+      singleDoubleWeekday: 7590,
+      tripleWeekday: 9240,
+      singleDoubleWeekend: 8250,
+      tripleWeekend: 9900,
+    },
+    {
+      id: 'executive_room',
+      name: 'EXECUTIVE ROOM',
+      singleDoubleWeekday: 10340,
+      tripleWeekday: 11990,
+      singleDoubleWeekend: 11000,
+      tripleWeekend: 12650,
+    },
+    {
+      id: 'executive_room_balcony',
+      name: 'EXECUTIVE ROOM WITH BALCONY',
+      singleDoubleWeekday: 12155,
+      tripleWeekday: 13805,
+      singleDoubleWeekend: 13365,
+      tripleWeekend: 15015,
+    },
+    {
+      id: 'one_bedroom_suite',
+      name: 'ONE BEDROOM SUITE',
+      singleDoubleWeekday: 14575,
+      tripleWeekday: 16225,
+      singleDoubleWeekend: 15235,
+      tripleWeekend: 16885,
+    },
+    {
+      id: 'one_bedroom_suite_balcony',
+      name: 'ONE BEDROOM SUITE WITH BALCONY',
+      singleDoubleWeekday: 17490,
+      tripleWeekday: 19140,
+      singleDoubleWeekend: 18150,
+      tripleWeekend: 19800,
+    },
+    {
+      id: 'governor_suite',
+      name: 'GOVERNOR SUITE',
+      singleDoubleWeekday: 29590,
+      tripleWeekday: 31240,
+      singleDoubleWeekend: 30250,
+      tripleWeekend: 31900,
+    },
+  ],
+  vouchers: {
+    breakfast: 725,
+    dinner: 1680,
+    extraBed: 1650,
+  },
+};

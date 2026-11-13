@@ -1,5 +1,5 @@
 import React from 'react';
-import { X } from 'lucide-react';
+import { MoreVertical, X } from 'lucide-react';
 import { formatMonth } from '../utils/hotelHelpers';
 
 export const PageHeader: React.FC<{
@@ -110,3 +110,90 @@ export const Toaster: React.FC = () => {
     </div>
   );
 };
+
+/** "⋮" button that opens a small menu of row actions (e.g. Edit / Delete). */
+export const RowMenu: React.FC<{
+  items: { label: string; Icon?: React.ElementType; onClick: () => void; danger?: boolean }[];
+  title?: string;
+}> = ({ items, title }) => {
+  const [pos, setPos] = React.useState<{ top: number; right: number } | null>(null);
+  const btn = React.useRef<HTMLButtonElement>(null);
+  React.useEffect(() => {
+    if (!pos) return;
+    const close = () => setPos(null);
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && close();
+    window.addEventListener('mousedown', close);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', close);
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [pos]);
+  const toggle = () => {
+    if (pos) return setPos(null);
+    const r = btn.current!.getBoundingClientRect();
+    setPos({ top: r.bottom + 4, right: window.innerWidth - r.right });
+  };
+  return (
+    <>
+      <button ref={btn} onClick={toggle} className="icon-btn" title={title} aria-haspopup="menu" aria-expanded={!!pos}>
+        <MoreVertical className="w-4 h-4" />
+      </button>
+      {pos && (
+        // fixed so it isn't clipped by scrolling lists; mousedown inside must not close it before the click lands
+        <div
+          role="menu"
+          onMouseDown={(e) => e.stopPropagation()}
+          className="fixed z-50 min-w-[140px] py-1 rounded-[10px] border border-line bg-surface"
+          style={{ top: pos.top, right: pos.right, boxShadow: 'var(--shadow-pop)' }}
+        >
+          {items.map(({ label, Icon, onClick, danger }) => (
+            <button
+              key={label}
+              role="menuitem"
+              onClick={() => {
+                setPos(null);
+                onClick();
+              }}
+              className={`w-full flex items-center gap-2.5 px-3 py-2 text-[13px] text-left cursor-pointer hover:bg-canvas ${danger ? 'text-bad' : 'text-ink'}`}
+            >
+              {Icon && <Icon className="w-3.5 h-3.5" />}
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+    </>
+  );
+};
+
+/** Yes/No confirmation pop-up (use instead of the browser's confirm()). */
+export const ConfirmDialog: React.FC<{
+  title: React.ReactNode;
+  message: React.ReactNode;
+  confirmLabel: string;
+  cancelLabel: string;
+  danger?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}> = ({ title, message, confirmLabel, cancelLabel, danger, onConfirm, onCancel }) => (
+  <Dialog title={title} onClose={onCancel} width="max-w-sm">
+    <div className="px-6 py-5 text-[13.5px] text-ink-2">{message}</div>
+    <div className="px-6 py-4 border-t border-line bg-sunken flex justify-end gap-2">
+      <button onClick={onCancel} className="btn btn-ghost">
+        {cancelLabel}
+      </button>
+      <button
+        onClick={onConfirm}
+        autoFocus
+        className={danger ? 'btn border border-bad-line bg-bad text-white hover:opacity-90' : 'btn btn-primary'}
+      >
+        {confirmLabel}
+      </button>
+    </div>
+  </Dialog>
+);

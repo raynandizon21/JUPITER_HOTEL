@@ -10,7 +10,7 @@ import { LanguageSelector } from './components/LanguageSelector';
 import jupiterLogo from './logo.jpg';
 import { Home as HomeIcon, Plus } from 'lucide-react';
 import { Toaster, toast } from './components/ui';
-import { ActiveModule, CasinoRatesConfig, FolioCharge, Reservation, Settlement } from './types/hotel';
+import { ActiveModule, CasinoRatesConfig, FolioCharge, Reservation, Settlement, VoucherSale } from './types/hotel';
 import { migrateReservation, syncStatus } from './utils/billing';
 import { api, ServerState } from './utils/api';
 import { defaultCasinoRates } from './data/initialData';
@@ -84,11 +84,14 @@ export default function App() {
   const [reservations, setReservations] = useState<Reservation[]>([]);
   // Payments Jupiter makes to the hotel, per reference month
   const [settlements, setSettlements] = useState<Settlement[]>([]);
+  // Vouchers bought without a room booking (for the record)
+  const [voucherSales, setVoucherSales] = useState<VoucherSale[]>([]);
   const [dbStatus, setDbStatus] = useState<'loading' | 'ready' | 'error'>('loading');
 
   // What the server already has (JSON per id / month), so only real changes are sent.
   const syncedRes = useRef(new Map<string, string>());
   const syncedSettle = useRef(new Map<string, string>());
+  const syncedVouchers = useRef(new Map<string, string>());
   const syncedRates = useRef('');
 
   useEffect(() => {
@@ -103,10 +106,13 @@ export default function App() {
         const res = state.reservations.map((r) => syncStatus(migrateReservation(r)));
         syncedRes.current = new Map(res.map((r) => [r.id, JSON.stringify(r)]));
         syncedSettle.current = new Map(state.settlements.map((s) => [s.month, JSON.stringify(s.payments)]));
+        const vouchers = state.voucherSales || [];
+        syncedVouchers.current = new Map(vouchers.map((v) => [v.id, JSON.stringify(v)]));
         const rates = state.rates.rooms.length ? state.rates : defaultCasinoRates;
         syncedRates.current = JSON.stringify(rates);
         setReservations(res);
         setSettlements(state.settlements);
+        setVoucherSales(vouchers);
         setCasinoRates(rates);
         setDbStatus('ready');
         if (imported) toast(language === 'en' ? 'Saved data moved to the database' : '저장된 데이터를 DB로 옮겼습니다', `${imported}`, 'info');
@@ -186,6 +192,27 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [casinoRates, dbStatus]);
 
+  useEffect(() => {
+    if (dbStatus !== 'ready') return;
+    const seen = new Set<string>();
+    for (const v of voucherSales) {
+      seen.add(v.id);
+      const json = JSON.stringify(v);
+      if (syncedVouchers.current.get(v.id) === json) continue;
+      syncedVouchers.current.set(v.id, json);
+      api.saveVoucherSale(v).catch((e) => {
+        syncedVouchers.current.delete(v.id); // retry on the next change
+        syncFailed(e);
+      });
+    }
+    for (const id of [...syncedVouchers.current.keys()]) {
+      if (seen.has(id)) continue;
+      syncedVouchers.current.delete(id);
+      api.deleteVoucherSale(id).catch(syncFailed);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voucherSales, dbStatus]);
+
   // 3. Navigation State
   const [activeModule, setActiveModule] = useState<ActiveModule>('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -242,6 +269,8 @@ export default function App() {
           autoOpenNew
           reservations={reservations}
           setReservations={setReservations}
+          voucherSales={voucherSales}
+          setVoucherSales={setVoucherSales}
           casinoRates={casinoRates}
           selectedMonth={selectedMonth}
           setSelectedMonth={setSelectedMonth}
@@ -252,6 +281,7 @@ export default function App() {
             setHighlightId(r.id);
             setActiveModule('ledger');
           }}
+          onVoucherCreated={() => setActiveModule('ledger')}
         />
       )}
       {/* Floating top bar */}
@@ -275,6 +305,12 @@ export default function App() {
               <img src={jupiterLogo} alt="Jupiter" className="absolute max-w-none w-[147px] left-[-14px] top-[-23px]" />
             </span>
           </button>
+          <div className="flex items-center gap-3 shrink-0 select-none">
+            <span className="w-px h-6 bg-white/20" />
+            <span className="text-[15px] font-semibold tracking-wide" style={{ color: '#e9c46a' }}>
+              Hotel PMS
+            </span>
+          </div>
         </div>
 
         {/* Right: live clock + language */}
@@ -333,6 +369,7 @@ export default function App() {
             {activeModule === 'dashboard' && (
               <DailyDashboard
                 reservations={reservations}
+                voucherSales={voucherSales}
                 casinoRates={casinoRates}
                 setReservations={setReservations}
                 settlements={settlements}
@@ -347,6 +384,7 @@ export default function App() {
             {activeModule === 'daily' && (
               <DailySettlement
                 reservations={reservations}
+                voucherSales={voucherSales}
                 setReservations={setReservations}
                 casinoRates={casinoRates}
                 selectedMonth={selectedMonth}
@@ -360,6 +398,8 @@ export default function App() {
                 highlightId={highlightId}
                 reservations={reservations}
                 setReservations={setReservations}
+                voucherSales={voucherSales}
+                setVoucherSales={setVoucherSales}
                 casinoRates={casinoRates}
                 selectedMonth={selectedMonth}
                 setSelectedMonth={setSelectedMonth}

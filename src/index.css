@@ -41,6 +41,9 @@
   --color-info: #33558a;
   --color-info-soft: #ebf0f8;
   --color-info-line: #cfdbee;
+  --color-violet: #6a48c2;
+  --color-violet-soft: #f2eefb;
+  --color-violet-line: #dcd2f3;
 
   --shadow-card: 0 1px 2px rgb(17 18 20 / 0.04), 0 4px 16px -6px rgb(17 18 20 / 0.06);
   --shadow-pop: 0 12px 32px -8px rgb(23 24 28 / 0.18), 0 2px 6px rgb(23 24 28 / 0.06);

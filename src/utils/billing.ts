@@ -1,4 +1,4 @@
-import { FolioPayment, PaymentMethod, Reservation, Settlement } from '../types/hotel';
+import { FolioPayment, PaymentMethod, Reservation, Settlement, VoucherSale } from '../types/hotel';
 
 export const PAYMENT_METHODS: PaymentMethod[] = ['Cash', 'Bank Transfer', 'GCash', 'Credit Card', 'Junket Account'];
 
@@ -18,6 +18,15 @@ export function folioOf(r: Reservation) {
   const balance = total - paid;
   const status: BillStatus = balance <= 0 ? 'paid' : paid > 0 ? 'partial' : 'unpaid';
   return { room: r.amount, extras, total, paid, balance, status };
+}
+
+/** Totals for a voucher-only purchase (same shape as folioOf, without a room charge). */
+export function voucherTotals(v: VoucherSale) {
+  const total = v.items.reduce((a, c) => a + c.qty * c.unitPrice, 0);
+  const paid = v.payments.reduce((a, p) => a + p.amount, 0);
+  const balance = total - paid;
+  const status: BillStatus = balance <= 0 ? 'paid' : paid > 0 ? 'partial' : 'unpaid';
+  return { total, paid, balance, status, qty: v.items.reduce((a, c) => a + c.qty, 0) };
 }
 
 /** Keep the legacy paymentStatus field in step with the folio balance. */

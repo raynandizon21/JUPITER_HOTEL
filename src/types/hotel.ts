@@ -34,6 +34,8 @@ export interface Reservation {
   occupancy?: 'singleDouble' | 'triple';
   isJupiterGuest?: boolean;
   holidayDates?: string[]; // nights charged at the weekend (holiday) rate
+  /** Confirmation number given by the hotel (typed in by staff; unique across bookings). */
+  confirmationNo?: string;
   oic?: string; // hotel officer-in-charge who handled the booking
   charges?: FolioCharge[]; // extra charges on the guest folio (room charge = amount)
   payments?: FolioPayment[]; // payments received from the guest
@@ -47,7 +49,7 @@ export interface FolioCharge {
   description: string;
   qty: number;
   unitPrice: number;
-  category?: 'buffet' | 'extraBed' | 'other';
+  category?: 'buffet' | 'extraBed' | 'other' | 'breakfast' | 'dinner'; // breakfast / dinner: voucher-only purchases
 }
 
 export interface FolioPayment {
@@ -59,6 +61,19 @@ export interface FolioPayment {
   /** Person in charge who handled the payment (payments to the hotel). */
   oic?: string;
   remarks?: string;
+}
+
+/**
+ * Vouchers bought without a room booking (breakfast / dinner / other).
+ * Kept for the record: shown in the Guest Ledger and Daily Settlement, not in the hotel settlement totals.
+ */
+export interface VoucherSale {
+  id: string;
+  date: string; // YYYY-MM-DD (purchase date; its month is the month it is listed under)
+  guestName: string;
+  remarks: string;
+  items: FolioCharge[]; // qty × unitPrice each
+  payments: FolioPayment[];
 }
 
 /** Payments Jupiter makes to the hotel for one reference month. */

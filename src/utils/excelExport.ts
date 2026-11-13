@@ -117,13 +117,13 @@ export async function exportSettlementExcel(month: string, bookings: Reservation
     ['Settlement period', formatMonth(month)],
     ['Bookings', bookings.length],
     ['Room-nights', nights],
-    ['Billed by hotel', billed, PESO],
+    ['Total hotel bill', billed, PESO],
     ['Paid to hotel', paidToHotel, PESO],
     ['Balance due to hotel', Math.max(billed - paidToHotel, 0), PESO],
     ['Status', billed > 0 && paidToHotel >= billed ? 'SETTLED' : 'OPEN'],
     ['', ''],
-    ['Collected from guests', guestPaid, PESO],
-    ['Still owed by guests', billed - guestPaid, PESO],
+    ['Guest payments received', guestPaid, PESO],
+    ['Unpaid by guests', billed - guestPaid, PESO],
   ];
   rows.forEach(([label, value, fmt], i) => {
     const r = sum.getRow(4 + i);
@@ -256,25 +256,25 @@ export async function exportSettlementExcel(month: string, bookings: Reservation
  */
 export async function exportDailyExcel(
   month: string,
-  rows: { date: string; checkIns: number; inHouse: number; nights: number; total: number; paid: number; paidAmount: number; unpaid: number; unpaidAmount: number }[],
+  rows: { date: string; checkIns: number; inHouse: number; nights: number; total: number; paid: number; paidAmount: number; unpaid: number; unpaidAmount: number; voucherAmount: number }[],
   roomsInUse: number
 ) {
   const ExcelJS = (await import('exceljs')).default;
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Jupiter Hotel PMS';
   const ws = wb.addWorksheet('Daily Settlement', { views: [{ state: 'frozen', ySplit: 6, showGridLines: false }] });
-  ws.columns = [{ width: 22 }, { width: 14 }, { width: 18 }, { width: 16 }, { width: 18 }, { width: 22 }, { width: 14 }, { width: 22 }];
+  ws.columns = [{ width: 22 }, { width: 14 }, { width: 18 }, { width: 16 }, { width: 18 }, { width: 22 }, { width: 14 }, { width: 22 }, { width: 22 }];
   const NAVY = 'FF1F3A5F';
   const thin = { style: 'thin' as const, color: { argb: 'FFD0D3DA' } };
 
-  ws.mergeCells('A1:H1');
+  ws.mergeCells('A1:I1');
   Object.assign(ws.getCell('A1'), { value: '일별 호텔 예약 & 결제 정산 대시보드  ·  Daily Hotel Reservation & Settlement' });
   ws.getCell('A1').font = { bold: true, size: 15, color: { argb: 'FFFFFFFF' } };
   ws.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
   ws.getCell('A1').alignment = { horizontal: 'center', vertical: 'middle' };
   ws.getRow(1).height = 30;
 
-  ws.mergeCells('A2:H2');
+  ws.mergeCells('A2:I2');
   ws.getCell('A2').value = '※ 예약 목록에 입력된 데이터가 자동으로 집계됩니다. 금액은 체크인 날짜 기준으로 집계됩니다. (Totals come from the Guest Ledger, counted on the check-in date.)';
   ws.getCell('A2').font = { italic: true, size: 9, color: { argb: 'FF6B6E76' } };
 
@@ -284,14 +284,14 @@ export async function exportDailyExcel(
   ws.getCell('B3').font = { bold: true, color: { argb: 'FF2350B5' } };
   ws.getCell('B3').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF2CC' } };
   ws.mergeCells('B3:C3');
-  ws.getCell('D3').value = '주피터고객이 사용중인 객실 (Rooms in use)';
+  ws.getCell('D3').value = '투숙 중 객실 (Occupied rooms)';
   ws.mergeCells('D3:E3');
   ws.getCell('F3').value = roomsInUse;
   ws.getCell('F3').numFmt = '0"실"';
   ws.getCell('F3').font = { bold: true };
 
-  const ko = ['날짜', '체크인 목록', '체크인 (예약 건수)', '총 숙박 박수', '결제 완료', '결제 금액 (PHP)', '미결제 건수', '미결제 금액 (PHP)'];
-  const enH = ['Date', 'Check-in List', 'Check-ins (Number of Reservations)', 'Total Nights Stayed', 'Paid (Bookings)', 'Paid Amount', 'Unpaid (Bookings)', 'Unpaid Amount'];
+  const ko = ['날짜', '체크인 목록', '체크인 (예약 건수)', '총 숙박 박수', '결제 완료', '결제 금액 (PHP)', '미결제 건수', '미결제 금액 (PHP)', '바우처 판매 (PHP)'];
+  const enH = ['Date', 'Check-in List', 'Check-ins (Number of Reservations)', 'Total Nights Stayed', 'Paid (Bookings)', 'Paid Amount', 'Unpaid (Bookings)', 'Unpaid Amount', 'Vouchers Sold (for record)'];
   ws.getRow(5).values = ko;
   ws.getRow(6).values = enH;
   [5, 6].forEach((r) => {
@@ -303,10 +303,10 @@ export async function exportDailyExcel(
     ws.getRow(r).height = 20;
   });
 
-  const fmts = [DATE, '0"건"', '0"명"', '0"박"', '0"건"', PESO, '0"건"', PESO];
+  const fmts = [DATE, '0"건"', '0"명"', '0"박"', '0"건"', PESO, '0"건"', PESO, PESO];
   rows.forEach((r, i) => {
     const row = ws.getRow(7 + i);
-    row.values = [toDate(r.date), r.checkIns, r.inHouse, r.nights, r.paid, r.paidAmount, r.unpaid, r.unpaidAmount];
+    row.values = [toDate(r.date), r.checkIns, r.inHouse, r.nights, r.paid, r.paidAmount, r.unpaid, r.unpaidAmount, r.voucherAmount];
     row.eachCell({ includeEmpty: true }, (c, col) => {
       c.numFmt = fmts[col - 1];
       c.border = { top: thin, bottom: thin, left: thin, right: thin };
@@ -314,12 +314,13 @@ export async function exportDailyExcel(
       if (col === 1 && getDayCategory(r.date) === 'weekend') c.font = { color: { argb: 'FFC0662B' }, bold: true };
       if ((col === 5 || col === 6) && (col === 5 ? r.paid : r.paidAmount)) c.font = { color: { argb: 'FF2E7A57' }, bold: true };
       if ((col === 7 || col === 8) && (col === 7 ? r.unpaid : r.unpaidAmount)) c.font = { color: { argb: 'FFB4372C' }, bold: true };
+      if (col === 9 && r.voucherAmount) c.font = { color: { argb: 'FFA86A12' }, bold: true };
     });
     if (r.checkIns) row.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE9EFFC' } };
   });
   const end = 7 + rows.length;
   const S = (col: string) => ({ formula: `SUM(${col}7:${col}${end - 1})` });
-  ws.getRow(end).values = ['월 합계 (Total)', S('B'), '', S('D'), S('E'), S('F'), S('G'), S('H')];
+  ws.getRow(end).values = ['월 합계 (Total)', S('B'), '', S('D'), S('E'), S('F'), S('G'), S('H'), S('I')];
   ws.getRow(end).eachCell({ includeEmpty: true }, (c, col) => {
     c.numFmt = fmts[col - 1] === DATE ? '@' : fmts[col - 1];
     c.font = { bold: true };

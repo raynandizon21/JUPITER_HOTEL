@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, FileSpreadsheet, BedDouble, LogIn, Moon, Wallet, CheckCircle2, AlertTriangle, Info, Receipt } from 'lucide-react';
-import { CasinoRatesConfig, Reservation } from '../types/hotel';
-import { folioOf, peso } from '../utils/billing';
+import { ChevronLeft, ChevronRight, FileSpreadsheet, BedDouble, LogIn, Moon, Wallet, CheckCircle2, AlertTriangle, Info, Receipt, CalendarDays } from 'lucide-react';
+import { CasinoRatesConfig, Reservation, VoucherSale } from '../types/hotel';
+import { folioOf, peso, voucherTotals } from '../utils/billing';
 import { formatLongDate, formatMonth, formatDateRange, getDaysInMonth, getDayCategory } from '../utils/hotelHelpers';
 import { Language } from '../i18n/translations';
 import { PageHeader, Dialog, MonthSelect, MONTHS, toast } from './ui';
@@ -10,6 +10,8 @@ import { GuestFolio, FolioStatusBadge } from './GuestFolio';
 interface Props {
   reservations: Reservation[];
   setReservations: React.Dispatch<React.SetStateAction<Reservation[]>>;
+  /** Vouchers bought without a room booking — shown per purchase date, for the record. */
+  voucherSales?: VoucherSale[];
   casinoRates: CasinoRatesConfig;
   selectedMonth: string;
   setSelectedMonth: (m: string) => void;
@@ -28,12 +30,15 @@ export interface DailyRow {
   paidAmount: number; // amount collected from guests
   unpaid: number; // 미결제 건수 (건)
   unpaidAmount: number; // 미결제 금액
+  vouchers: number; // voucher-only purchases that day (건) — for the record, not in the totals above
+  voucherAmount: number; // their total (PHP)
 }
 
-export function buildDailyRows(reservations: Reservation[], month: string): DailyRow[] {
+export function buildDailyRows(reservations: Reservation[], month: string, voucherSales: VoucherSale[] = []): DailyRow[] {
   return getDaysInMonth(month).map((date) => {
     const arriving = reservations.filter((r) => r.checkIn === date);
     const folios = arriving.map(folioOf);
+    const sold = voucherSales.filter((v) => v.date === date);
     return {
       date,
       checkIns: arriving.length,
@@ -45,6 +50,8 @@ export function buildDailyRows(reservations: Reservation[], month: string): Dail
       paidAmount: folios.reduce((a, f) => a + f.paid, 0),
       unpaid: folios.filter((f) => f.balance > 0).length,
       unpaidAmount: folios.reduce((a, f) => a + Math.max(f.balance, 0), 0),
+      vouchers: sold.length,
+      voucherAmount: sold.reduce((a, v) => a + voucherTotals(v).total, 0),
     };
   });
 }
@@ -55,7 +62,7 @@ const shiftMonth = (ym: string, delta: number) => {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 };
 
-export const DailySettlement: React.FC<Props> = ({ reservations, setReservations, casinoRates, selectedMonth, setSelectedMonth, language, embedded = false }) => {
+export const DailySettlement: React.FC<Props> = ({ reservations, setReservations, voucherSales = [], casinoRates, selectedMonth, setSelectedMonth, language, embedded = false }) => {
   const en = language === 'en';
   const month = selectedMonth || '2026-11';
   const [onlyActive, setOnlyActive] = useState(false);
@@ -79,7 +86,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
   const [inHouseDate, setInHouseDate] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
 
-  const rows = useMemo(() => buildDailyRows(reservations, month), [reservations, month]);
+  const rows = useMemo(() => buildDailyRows(reservations, month, voucherSales), [reservations, month, voucherSales]);
   const months = useMemo(() => Array.from(new Set([...MONTHS, month, ...reservations.map((r) => r.referenceMonth)])).sort(), [reservations, month]);
 
   const t = useMemo(() => {
@@ -93,7 +100,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
   const refDate = todayISO.startsWith(month) ? todayISO : rows.reduce((b, r) => (r.inHouse > b.inHouse ? r : b), rows[0])?.date;
   const inHouseNow = rows.find((r) => r.date === refDate)?.inHouse ?? 0;
 
-  const visible = onlyActive ? rows.filter((r) => r.checkIns > 0 || r.inHouse > 0) : rows;
+  const visible = onlyActive ? rows.filter((r) => r.checkIns > 0 || r.inHouse > 0 || r.vouchers > 0) : rows;
   // table pagination, opening on the page that holds today.
   // As many normal-height rows as fit the card (no stretched rows, no inner scroll).
   const areaRef = useRef<HTMLDivElement>(null);
@@ -142,10 +149,18 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
     }
   };
 
-  const H: React.FC<{ ko: string; enLabel: string; align?: 'l' | 'c' | 'r'; tip?: string }> = ({ ko, enLabel, align = 'c', tip }) => (
-    <th className={`${align === 'r' ? 'r' : align === 'c' ? 'c' : ''} ${embedded ? '!whitespace-normal !px-2' : ''}`} title={tip}>
-      <div className="normal-case tracking-normal text-[12px] font-semibold text-ink">{ko}</div>
-      <div className="text-[10px] text-muted mt-0.5">{enLabel}</div>
+  // Column groups are colour-coded: blue = check-ins / occupancy, green = paid, red = unpaid.
+  const HEAD_TONE = {
+    none: { th: '', ko: 'text-ink', en: 'text-muted' },
+    info: { th: '!bg-accent-soft', ko: 'text-accent', en: 'text-accent/70' },
+    ok: { th: '!bg-ok-soft', ko: 'text-ok', en: 'text-ok/70' },
+    bad: { th: '!bg-bad-soft', ko: 'text-bad', en: 'text-bad/70' },
+    warn: { th: '!bg-warn-soft', ko: 'text-warn', en: 'text-warn/70' },
+  } as const;
+  const H: React.FC<{ ko: string; enLabel: string; align?: 'l' | 'c' | 'r'; tip?: string; tone?: keyof typeof HEAD_TONE }> = ({ ko, enLabel, align = 'c', tip, tone = 'none' }) => (
+    <th className={`${align === 'r' ? 'r' : align === 'c' ? 'c' : ''} ${embedded ? '!whitespace-normal !px-2' : ''} ${HEAD_TONE[tone].th}`} title={tip}>
+      <div className={`normal-case tracking-normal text-[12px] font-semibold ${HEAD_TONE[tone].ko}`}>{ko}</div>
+      <div className={`text-[10px] mt-0.5 ${HEAD_TONE[tone].en}`}>{enLabel}</div>
     </th>
   );
 
@@ -184,12 +199,12 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
 
       {/* Month summary */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-4">
-        <Stat Icon={BedDouble} label={en ? 'Rooms in use (Jupiter)' : '주피터고객 사용중 객실'} value={unit(inHouseNow, '실')} sub={refDate ? formatLongDate(refDate) : ''} tone="info" />
-        <Stat Icon={LogIn} label={en ? 'Check-ins' : '체크인'} value={unit(t.checkIns, '건')} />
-        <Stat Icon={Moon} label={en ? 'Total nights' : '총 숙박'} value={unit(t.nights, '박')} />
-        <Stat Icon={Wallet} label={en ? 'Total payment' : '총 결제 금액'} value={peso(t.total)} />
-        <Stat Icon={CheckCircle2} label={en ? 'Payment completed' : '결제 완료'} value={unit(t.paid, '건')} tone="ok" />
-        <Stat Icon={AlertTriangle} label={en ? 'Unpaid' : '미결제'} value={unit(t.unpaid, '건')} sub={peso(t.unpaidAmount)} tone={t.unpaid ? 'bad' : undefined} />
+        <Stat Icon={BedDouble} label={en ? 'Occupied rooms' : '투숙 중 객실'} value={unit(inHouseNow, '실')} sub={refDate ? formatLongDate(refDate) : ''} color="blue" />
+        <Stat Icon={LogIn} label={en ? 'Check-ins' : '체크인'} value={unit(t.checkIns, '건')} color="violet" />
+        <Stat Icon={Moon} label={en ? 'Total nights' : '총 숙박'} value={unit(t.nights, '박')} color="navy" />
+        <Stat Icon={Wallet} label={en ? 'Total payment' : '총 결제 금액'} value={peso(t.total)} color="amber" />
+        <Stat Icon={CheckCircle2} label={en ? 'Payment completed' : '결제 완료'} value={unit(t.paid, '건')} color="green" />
+        <Stat Icon={AlertTriangle} label={en ? 'Unpaid' : '미결제'} value={unit(t.unpaid, '건')} sub={peso(t.unpaidAmount)} color={t.unpaid ? 'red' : 'green'} />
       </div>
       </>
       )}
@@ -197,7 +212,12 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
       <div className={`card overflow-hidden flex flex-col ${embedded ? 'h-full' : 'h-[calc(100vh-310px)] min-h-[380px]'}`}>
         <div className="card-head">
           <div>
-            <h3 className="card-title">{embedded ? (en ? 'Daily Settlement' : '일별 정산') : formatMonth(month)}</h3>
+            <h3 className="card-title flex items-center gap-2.5">
+              <span className="w-7 h-7 rounded-[8px] bg-accent text-white grid place-items-center">
+                <CalendarDays className="w-4 h-4" strokeWidth={1.75} />
+              </span>
+              {embedded ? (en ? 'Daily Settlement' : '일별 정산') : formatMonth(month)}
+            </h3>
             <p className="text-[12.5px] text-muted mt-0.5">{en ? 'Click a day with check-ins to see the guests' : '체크인이 있는 날짜를 클릭하면 손님 목록이 표시됩니다'}</p>
           </div>
           <div className="flex items-center gap-2">
@@ -219,17 +239,25 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
             <thead>
               <tr>
                 <H ko="날짜" enLabel="Date" align="l" />
-                <H ko="체크인 목록" enLabel="Check-in list" tip={en ? 'Guests who arrived on this day' : '이날 도착한 손님 수'} />
+                <H tone="info" ko="체크인 목록" enLabel="Check-in list" tip={en ? 'Guests who arrived on this day' : '이날 도착한 손님 수'} />
                 <H
+                  tone="info"
                   ko="체크인 (예약 건수)"
                   enLabel="Check-ins (No. of Reservations)"
                   tip={en ? 'Reservations staying that night — includes guests who checked in on earlier days' : '그날 밤 투숙 중인 예약 수 (이전에 체크인한 손님 포함)'}
                 />
-                <H ko="총 숙박 박수" enLabel="Total nights stayed" tip={en ? 'Nights stayed on this date — 1 room occupied that night = 1 night' : '이 날짜의 숙박 박수 — 그날 밤 사용 객실 1개 = 1박'} />
-                <H ko="결제 완료" enLabel="Paid (bookings)" />
-                <H ko="결제 금액" enLabel="Paid amount (PHP)" align="r" tip={en ? 'All money received that day, including partial payments' : '부분 결제 포함 받은 금액'} />
-                <H ko="미결제 건수" enLabel="Unpaid (bookings)" />
-                <H ko="미결제 금액" enLabel="Unpaid amount (PHP)" align="r" />
+                <H tone="info" ko="총 숙박 박수" enLabel="Total nights stayed" tip={en ? 'Nights stayed on this date — 1 room occupied that night = 1 night' : '이 날짜의 숙박 박수 — 그날 밤 사용 객실 1개 = 1박'} />
+                <H tone="ok" ko="결제 완료" enLabel="Paid (bookings)" />
+                <H tone="ok" ko="결제 금액" enLabel="Paid amount (PHP)" align="r" tip={en ? 'All money received that day, including partial payments' : '부분 결제 포함 받은 금액'} />
+                <H tone="bad" ko="미결제 건수" enLabel="Unpaid (bookings)" />
+                <H tone="bad" ko="미결제 금액" enLabel="Unpaid amount (PHP)" align="r" />
+                <H
+                  tone="warn"
+                  ko="바우처 판매"
+                  enLabel="Vouchers sold (PHP)"
+                  align="r"
+                  tip={en ? 'Vouchers bought without a room booking, by purchase date — for the record (not in the totals)' : '객실 예약 없이 구매한 바우처 (구매일 기준, 기록용 · 합계 미포함)'}
+                />
               </tr>
             </thead>
             <tbody>
@@ -252,8 +280,8 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                       </span>
                       {isToday && <span className="ml-2 badge badge-accent !h-5 !text-[10px]">{en ? 'Today' : '오늘'}</span>}
                     </td>
-                    <td className="c num">{has ? <span className="badge badge-info num">{unit(r.checkIns, '건')}</span> : z(0, '건')}</td>
-                    <td className="c num">
+                    <td className="c num bg-accent-soft/30">{has ? <span className="badge badge-info num">{unit(r.checkIns, '건')}</span> : z(0, '건')}</td>
+                    <td className="c num bg-accent-soft/30">
                       {r.inHouse ? (
                         <button
                           onClick={(e) => {
@@ -270,7 +298,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                         z(0, '명')
                       )}
                     </td>
-                    <td className="c num">
+                    <td className="c num bg-accent-soft/30">
                       {r.nights ? (
                         <button
                           onClick={(e) => {
@@ -294,17 +322,30 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                         z(0, '박')
                       )}
                     </td>
-                    <td className="c">
+                    <td className="c bg-ok-soft/30">
                       {!has ? <span className="text-faint">—</span> : r.paid ? <Link value={unit(r.paid, '건')} tone="ok" onClick={() => open(r.date, 'paid')} /> : <span className="num text-muted">{unit(0, '건')}</span>}
                     </td>
-                    <td className="r">
+                    <td className="r bg-ok-soft/30">
                       {!has ? <span className="text-faint">—</span> : r.paidAmount ? <Link value={peso(r.paidAmount)} tone="ok" onClick={() => open(r.date, 'all')} /> : <span className="num text-muted">{peso(0)}</span>}
                     </td>
-                    <td className="c">
+                    <td className="c bg-bad-soft/30">
                       {!has ? <span className="text-faint">—</span> : r.unpaid ? <Link value={unit(r.unpaid, '건')} tone="bad" onClick={() => open(r.date, 'unpaid')} /> : <span className="num text-muted">{unit(0, '건')}</span>}
                     </td>
-                    <td className="r">
+                    <td className="r bg-bad-soft/30">
                       {!has ? <span className="text-faint">—</span> : r.unpaidAmount ? <Link value={peso(r.unpaidAmount)} tone="bad" onClick={() => open(r.date, 'unpaid')} /> : <span className="num text-muted">{peso(0)}</span>}
+                    </td>
+                    <td
+                      className="r bg-warn-soft/30"
+                      title={
+                        r.vouchers
+                          ? voucherSales
+                              .filter((v) => v.date === r.date)
+                              .map((v) => `${v.guestName}: ${v.items.map((c) => `${c.description} × ${c.qty}`).join(', ')} = ${peso(voucherTotals(v).total)}`)
+                              .join('\n')
+                          : undefined
+                      }
+                    >
+                      {r.vouchers ? <span className="num font-semibold text-warn">{peso(r.voucherAmount)}</span> : <span className="text-faint">—</span>}
                     </td>
                   </tr>
                 );
@@ -550,13 +591,25 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
   );
 };
 
-const Stat: React.FC<{ Icon: React.ElementType; label: string; value: string; sub?: string; tone?: 'ok' | 'bad' | 'info' }> = ({ Icon, label, value, sub, tone }) => (
-  <div className={`card p-4 ${tone === 'info' ? '!bg-accent-soft/50 !border-accent-line' : ''}`}>
-    <div className="flex items-center gap-2 text-[12px] text-ink-2">
-      <Icon className={`w-4 h-4 ${tone === 'ok' ? 'text-ok' : tone === 'bad' ? 'text-bad' : tone === 'info' ? 'text-accent' : 'text-muted'}`} />
+// card colour: tinted background + border, solid icon tile, coloured value
+const STAT_COLOR = {
+  blue: { card: '!bg-accent-soft !border-accent-line', icon: 'bg-accent', value: 'text-accent' },
+  navy: { card: '!bg-info-soft !border-info-line', icon: 'bg-info', value: 'text-info' },
+  violet: { card: '!bg-violet-soft !border-violet-line', icon: 'bg-violet', value: 'text-violet' },
+  amber: { card: '!bg-warn-soft !border-warn-line', icon: 'bg-warn', value: 'text-warn' },
+  green: { card: '!bg-ok-soft !border-ok-line', icon: 'bg-ok', value: 'text-ok' },
+  red: { card: '!bg-bad-soft !border-bad-line', icon: 'bg-bad', value: 'text-bad' },
+} as const;
+
+const Stat: React.FC<{ Icon: React.ElementType; label: string; value: string; sub?: string; color: keyof typeof STAT_COLOR }> = ({ Icon, label, value, sub, color }) => (
+  <div className={`card p-4 ${STAT_COLOR[color].card}`}>
+    <div className="flex items-center gap-2.5 text-[12px] text-ink-2">
+      <span className={`w-7 h-7 shrink-0 rounded-[8px] grid place-items-center text-white ${STAT_COLOR[color].icon}`}>
+        <Icon className="w-4 h-4" strokeWidth={1.75} />
+      </span>
       <span className="truncate">{label}</span>
     </div>
-    <div className={`num text-[20px] font-semibold mt-2 leading-none ${tone === 'ok' ? 'text-ok' : tone === 'bad' ? 'text-bad' : 'text-ink'}`}>{value}</div>
+    <div className={`num text-[20px] font-semibold mt-3 leading-none ${STAT_COLOR[color].value}`}>{value}</div>
     {sub && <div className="text-[11.5px] text-muted mt-1.5 truncate">{sub}</div>}
   </div>
 );

@@ -28,14 +28,16 @@ To check for dead code, run `npx tsc --noEmit --noUnusedLocals --noUnusedParamet
 
 - **Data is saved in MySQL** (DB `jupiter_hotel`) through the Node backend `server/index.js`. The app calls `/api` via `src/utils/api.ts`:
   - `GET /api/state` loads rates, bookings (with charges and payments) and payments to the hotel on startup;
-  - `PUT/DELETE /api/reservations/:id` (id = `CONFIRM_NUM`; delete sets `ACTIVE = 0`), `PUT /api/settlements/:month`, `PUT /api/rates`.
+  - `PUT/DELETE /api/reservations/:id` (id = `booking.APP_ID`; delete sets `ACTIVE = 0`), `PUT /api/settlements/:month`, `PUT /api/rates`.
+  - `booking.CONFIRM_NUM` = the **hotel's confirmation number** (`Reservation.confirmationNo`), typed in by staff. Optional, but **1 number = 1 booking**: the form blocks duplicates and the server returns 409 (deleted bookings keep their number too).
   - The pages still use plain React state. Effects in `src/App.tsx` diff each change against what the server has and send only what changed.
   - Only the language (`hotel_language_v2`) stays in localStorage. Old browser data (`hotel_reservations_v2`, `hotel_settlements_v1`, `hotel_casino_rates_v2`) is moved into MySQL once by `importLocalData`, then removed.
+  - **Voucher-only purchases** (`VoucherSale`, tables `voucher_sales` / `voucher_sale_items` / `voucher_sale_payments`, `PUT/DELETE /api/vouchers/:id`): vouchers bought **without** a room booking. New Booking → *Vouchers only* (`VoucherSaleForm`). They are **for the record**: listed under the Guest Ledger and in the Daily Settlement *Vouchers sold* column (by purchase date), but **not** in check-ins / nights / occupancy or the hotel settlement totals.
   - There is no login yet: `BOOKED_BY` / `CREATED_BY` use the seeded `system` user (IDNo 1).
 - The app starts **empty**: there is no sample or demo data. The **Clear data** sidebar button is hidden (pass `onClearData` to `Sidebar` to show it again).
 - **MySQL schema** is in `database/schema.sql` (7 tables). `scripts/init-db.mjs` applies it on `npm run dev` using the `DB_*` values in `.env`.
   - It only uses `CREATE … IF NOT EXISTS` and `INSERT IGNORE`, so it is safe to re-run.
-  - Columns added later (`booking.CURRENCY`, `booking.IS_JUPITER_GUEST`) are added by `ensureColumns` in `server/index.js` when the backend starts.
+  - Columns added later (`booking.CURRENCY`, `booking.IS_JUPITER_GUEST`, `booking.APP_ID`) and the voucher tables are added by `ensureColumns` in `server/index.js` when the backend starts.
 - **Dev:** run the backend too (`node --env-file=.env server/index.js`); Vite proxies `/api` to `API_PORT`.
 - Old saved bookings are upgraded on load by `migrateReservation` (`src/utils/billing.ts`). Keep that function working when you change the `Reservation` shape.
 
@@ -54,6 +56,7 @@ To check for dead code, run `npx tsc --noEmit --noUnusedLocals --noUnusedParamet
   - *Check-in list* = arrivals that day;
   - *Check-ins (No. of Reservations)* and *Total nights stayed* = rooms occupied that night (`checkIn ≤ date < checkOut`, 1 room = 1 night);
   - Paid/Unpaid counts and amounts are per check-in date.
+  - *Vouchers sold* = voucher-only purchases that day (record only, not added to the other columns).
 - Extra charges with the same description + date + unit price are **merged** (qty added), not duplicated.
 - The reservation OIC (hotel) has been **removed** from the UI and exports. Only *payments to the hotel* have an OIC field.
 
@@ -84,6 +87,7 @@ To check for dead code, run `npx tsc --noEmit --noUnusedLocals --noUnusedParamet
 | `src/components/DailyDashboard.tsx` | Dashboard (monthly settlement, payments to hotel, guest balances; embeds Daily Settlement) |
 | `src/components/DailySettlement.tsx` | Daily table, guest / in-house pop-ups, `Pager` |
 | `src/components/GuestReservationLedger.tsx` | Ledger table + New/Edit reservation form with confirm step |
+| `src/components/VoucherSaleForm.tsx` | Voucher-only purchase form (New Booking → Vouchers only; ledger edit) |
 | `src/components/GuestFolio.tsx` | Guest billing pop-up (charges, payments, print) |
 | `src/components/ReservationCalendar.tsx` | Month calendar; clicking a booking opens billing |
 | `src/components/RoomRatesMaintenance.tsx` | Rate grid with Settings edit mode |

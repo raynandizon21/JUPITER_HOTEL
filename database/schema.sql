@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS `addon_rates` (
 --    Status (Paid / Partial / Unpaid) is computed in Node, not stored.
 CREATE TABLE IF NOT EXISTS `booking` (
   `IDNo`           INT           NOT NULL AUTO_INCREMENT,
-  `CONFIRM_NUM`    VARCHAR(50)   NOT NULL,
+  `APP_ID`         VARCHAR(50)   NOT NULL COMMENT 'the app''s own booking id (key for saving)',
+  `CONFIRM_NUM`    VARCHAR(50)   NULL COMMENT 'hotel confirmation number, typed in by staff (unique)',
   `ACCT_NUM`       VARCHAR(50)   NULL COMMENT 'optional account no.',
   `GUEST_NAME`     VARCHAR(150)  NOT NULL,
   `ROOM_TYPE_ID`   INT           NOT NULL,
@@ -93,6 +94,7 @@ CREATE TABLE IF NOT EXISTS `booking` (
   `EDITED_DT`      DATETIME      NULL ON UPDATE CURRENT_TIMESTAMP,
   `EDITED_BY`      INT           NULL,
   PRIMARY KEY (`IDNo`),
+  UNIQUE KEY `uq_booking_app_id` (`APP_ID`),
   UNIQUE KEY `uq_booking_confirm` (`CONFIRM_NUM`),
   KEY `idx_booking_checkin` (`CHECK_IN`),
   KEY `idx_booking_refmonth` (`REF_MONTH`),
@@ -161,6 +163,53 @@ CREATE TABLE IF NOT EXISTS `hotel_payments` (
   KEY `idx_hotel_payments_month` (`SETTLE_MONTH`),
   CONSTRAINT `chk_hotel_payments_amount` CHECK (`AMOUNT` > 0),
   CONSTRAINT `fk_hotel_payments_user` FOREIGN KEY (`CREATED_BY`) REFERENCES `users` (`IDNo`)
+) ENGINE=InnoDB;
+
+
+-- 8) Voucher-only purchases (no room booking) — for the record ---------
+--    Shown in the Guest Ledger and Daily Settlement; not part of the hotel settlement totals.
+CREATE TABLE IF NOT EXISTS `voucher_sales` (
+  `IDNo`        INT          NOT NULL AUTO_INCREMENT,
+  `APP_ID`      VARCHAR(50)  NOT NULL COMMENT 'the app''s own id (key for saving)',
+  `SALE_DATE`   DATE         NOT NULL,
+  `REF_MONTH`   CHAR(7)      AS (CONCAT(YEAR(`SALE_DATE`), '-', LPAD(MONTH(`SALE_DATE`), 2, '0'))) STORED,
+  `GUEST_NAME`  VARCHAR(150) NOT NULL,
+  `REMARKS`     VARCHAR(500) NULL,
+  `ACTIVE`      TINYINT(1)   NOT NULL DEFAULT 1 COMMENT '0 = deleted',
+  `CREATED_DT`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `CREATED_BY`  INT          NOT NULL,
+  `EDITED_DT`   DATETIME     NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`IDNo`),
+  UNIQUE KEY `uq_voucher_sales_app_id` (`APP_ID`),
+  KEY `idx_voucher_sales_month` (`REF_MONTH`),
+  CONSTRAINT `fk_voucher_sales_user` FOREIGN KEY (`CREATED_BY`) REFERENCES `users` (`IDNo`)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS `voucher_sale_items` (
+  `IDNo`        INT           NOT NULL AUTO_INCREMENT,
+  `SALE_ID`     INT           NOT NULL,
+  `CATEGORY`    ENUM('breakfast','dinner','other') NOT NULL DEFAULT 'other',
+  `DESCRIPTION` VARCHAR(200)  NOT NULL,
+  `QTY`         INT           NOT NULL DEFAULT 1,
+  `UNIT_PRICE`  DECIMAL(12,2) NOT NULL,
+  `AMOUNT`      DECIMAL(12,2) AS (`QTY` * `UNIT_PRICE`) STORED,
+  PRIMARY KEY (`IDNo`),
+  KEY `idx_voucher_items_sale` (`SALE_ID`),
+  CONSTRAINT `chk_voucher_items_qty` CHECK (`QTY` > 0),
+  CONSTRAINT `fk_voucher_items_sale` FOREIGN KEY (`SALE_ID`) REFERENCES `voucher_sales` (`IDNo`) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS `voucher_sale_payments` (
+  `IDNo`       INT           NOT NULL AUTO_INCREMENT,
+  `SALE_ID`    INT           NOT NULL,
+  `PAY_DATE`   DATE          NOT NULL,
+  `AMOUNT`     DECIMAL(12,2) NOT NULL,
+  `METHOD`     ENUM('Cash','Bank Transfer','GCash','Credit Card','Junket Account') NOT NULL DEFAULT 'Cash',
+  `REFERENCE`  VARCHAR(100)  NULL,
+  PRIMARY KEY (`IDNo`),
+  KEY `idx_voucher_payments_sale` (`SALE_ID`),
+  CONSTRAINT `chk_voucher_payments_amount` CHECK (`AMOUNT` > 0),
+  CONSTRAINT `fk_voucher_payments_sale` FOREIGN KEY (`SALE_ID`) REFERENCES `voucher_sales` (`IDNo`) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 

@@ -362,7 +362,7 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
 
           {/* add charge */}
           <div className="mt-2 grid grid-cols-12 gap-2 items-end">
-            <div className="col-span-12 sm:col-span-3">
+            <div className="col-span-6 sm:col-span-3">
               <label className="field-label">{en ? 'Item' : '항목'}</label>
               <select value={preset} onChange={(e) => pickPreset(e.target.value)} className="input input-sm">
                 {presets.map((p) => (
@@ -370,7 +370,7 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
                 ))}
               </select>
             </div>
-            <div className="col-span-12 sm:col-span-3">
+            <div className="col-span-6 sm:col-span-3">
               <label className="field-label">{en ? 'Description' : '내역'}</label>
               <input value={chDesc} onChange={(e) => setChDesc(e.target.value)} placeholder={en ? 'e.g. Minibar' : '예: 미니바'} className="input input-sm" />
             </div>
@@ -383,13 +383,20 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
               <input inputMode="numeric" value={chQty} onChange={(e) => setChQty(parseInt(e.target.value.replace(/\D/g, ''), 10) || 0)} className="input input-sm text-center num" />
             </div>
             <div className="col-span-4 sm:col-span-2">
-              <label className="field-label">{en ? 'Unit price' : '단가'}</label>
-              <input
-                inputMode="numeric"
-                value={chPrice.toLocaleString('en-US')}
-                onChange={(e) => setChPrice(parseInt(e.target.value.replace(/\D/g, ''), 10) || 0)}
-                className="input input-sm text-right num"
-              />
+              <label className="field-label">{en ? 'Amount' : '금액'}</label>
+              {/* Qty × unit price. The preset sets the unit price; typing an amount sets unit price = amount ÷ qty. */}
+              <div className="relative">
+                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[12px] text-faint">₱</span>
+                <input
+                  inputMode="numeric"
+                  value={(chQty * chPrice).toLocaleString('en-US')}
+                  onChange={(e) => {
+                    const amt = parseInt(e.target.value.replace(/\D/g, ''), 10) || 0;
+                    setChPrice(chQty > 0 ? Math.round(amt / chQty) : amt);
+                  }}
+                  className="input input-sm text-right num font-semibold pl-6"
+                />
+              </div>
             </div>
             <div className="col-span-2 sm:col-span-1">
               <button onClick={addCharge} className="btn btn-outline btn-sm w-full !h-[30px]" title={en ? 'Add charge' : '청구 추가'}>

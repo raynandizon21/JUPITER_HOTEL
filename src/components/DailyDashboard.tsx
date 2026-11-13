@@ -1,16 +1,17 @@
 import React, { useState, useMemo } from 'react';
 import { DailySettlement } from './DailySettlement';
-import { Reservation, CasinoRatesConfig, Settlement, PaymentMethod, FolioPayment } from '../types/hotel';
+import { Reservation, CasinoRatesConfig, Settlement, PaymentMethod, FolioPayment, VoucherSale } from '../types/hotel';
 import { folioOf, settlementOf, PAYMENT_METHODS, uid, todayISO, printDocument, escapeHtml as esc } from '../utils/billing';
 import { GuestFolio } from './GuestFolio';
 import { exportSettlementExcel } from '../utils/excelExport';
 import { formatCurrency, calculateCasinoStayPrice, formatLongDate, formatMonth, formatDateRange } from '../utils/hotelHelpers';
-import { FileSpreadsheet, AlertTriangle, CheckCircle2, ArrowUpRight, Printer, Wallet, Scale, Landmark, Plus, Trash2, Receipt, Users } from 'lucide-react';
+import { FileSpreadsheet, AlertTriangle, CheckCircle2, ArrowUpRight, Printer, Wallet, Scale, Landmark, Plus, Pencil, Trash2, Receipt, Users, History } from 'lucide-react';
 import { Language } from '../i18n/translations';
-import { PageHeader, Dialog, MonthSelect, MONTHS, toast } from './ui';
+import { PageHeader, Dialog, ConfirmDialog, MonthSelect, MONTHS, RowMenu, toast } from './ui';
 
 interface DailyDashboardProps {
   reservations: Reservation[];
+  voucherSales: VoucherSale[];
   casinoRates: CasinoRatesConfig;
   setReservations: React.Dispatch<React.SetStateAction<Reservation[]>>;
   settlements: Settlement[];
@@ -44,6 +45,7 @@ const summarize = (list: Reservation[], paidToHotel: number) => {
 
 export const DailyDashboard: React.FC<DailyDashboardProps> = ({
   reservations,
+  voucherSales,
   casinoRates,
   setReservations,
   settlements,
@@ -74,8 +76,18 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
   const [payRef, setPayRef] = useState('');
   const [payOic, setPayOic] = useState('');
   const [payRemarks, setPayRemarks] = useState('');
+  // payment being edited (null = adding a new one)
+  const [editingPay, setEditingPay] = useState<FolioPayment | null>(null);
   React.useEffect(() => {
-    if (payOpen) {
+    if (!payOpen) return setEditingPay(null);
+    if (editingPay) {
+      setPayAmount(editingPay.amount);
+      setPayDate(editingPay.date);
+      setPayMethod(editingPay.method);
+      setPayRef(editingPay.reference || '');
+      setPayOic(editingPay.oic || '');
+      setPayRemarks(editingPay.remarks || '');
+    } else {
       setPayAmount(s.balance);
       setPayDate(todayISO());
       setPayRef('');
@@ -85,8 +97,24 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [payOpen]);
 
+  // Most this payment can be: what is still unpaid, plus (when editing) this payment's own old amount.
+  const maxPay = editingPay ? Math.max(s.billed - (s.settled - editingPay.amount), 0) : s.balance;
+  const overPay = payAmount > maxPay;
+
+  const editHotelPayment = (p: FolioPayment) => {
+    setEditingPay(p);
+    setPayOpen(true);
+  };
+
+  // Edit and delete both ask for confirmation first.
+  const [confirmPay, setConfirmPay] = useState<{ kind: 'edit' | 'delete'; pay: FolioPayment } | null>(null);
+
   const addHotelPayment = () => {
-    if (payAmount <= 0) return;
+    if (payAmount <= 0 || overPay) return;
+    if (editingPay) {
+      setConfirmPay({ kind: 'edit', pay: editingPay });
+      return;
+    }
     const p: FolioPayment = { id: uid(), date: payDate, amount: payAmount, method: payMethod, reference: payRef.trim(), oic: payOic.trim(), remarks: payRemarks.trim() };
     setSettlements((prev) => {
       const exists = prev.some((x) => x.month === month);
@@ -99,8 +127,13 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
       `${php(p.amount)} · ${formatMonth(month)} — ${left === 0 ? (en ? 'month fully settled' : '정산 완료') : `${en ? 'balance' : '잔액'} ${php(left)}`}`
     );
   };
+  const saveEditedPayment = (old: FolioPayment) => {
+    const updated: FolioPayment = { ...old, date: payDate, amount: payAmount, method: payMethod, reference: payRef.trim(), oic: payOic.trim(), remarks: payRemarks.trim() };
+    setSettlements((prev) => prev.map((x) => (x.month === month ? { ...x, payments: x.payments.map((p) => (p.id === updated.id ? updated : p)) } : x)));
+    setPayOpen(false);
+    toast(en ? 'Payment to hotel updated' : '호텔 지급 수정됨', `${php(updated.amount)} · ${formatMonth(month)}`);
+  };
   const removeHotelPayment = (id: string) => {
-    if (!confirm(en ? 'Remove this payment to the hotel?' : '이 지급 내역을 삭제하시겠습니까?')) return;
     setSettlements((prev) => prev.map((x) => (x.month === month ? { ...x, payments: x.payments.filter((p) => p.id !== id) } : x)));
     toast(en ? 'Payment to hotel removed' : '호텔 지급 삭제됨', formatMonth(month), 'bad');
   };
@@ -201,16 +234,17 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
 
       {/* Row 1 — basic cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 mb-4">
-        <StatCard Icon={Wallet} label={en ? 'Billed by hotel' : '호텔 청구액'} value={php(s.billed)} pill={`${s.count} ${en ? 'bookings' : '건'}`} tone="neutral" />
-        <StatCard Icon={Landmark} label={en ? 'Paid to hotel' : '호텔 지급액'} value={php(s.settled)} pill={`${s.pct}%`} tone="ok" />
-        <StatCard Icon={AlertTriangle} label={en ? 'Balance due to hotel' : '호텔 미지급 잔액'} value={php(s.balance)} pill={s.balance > 0 ? (en ? 'Open' : '미정산') : en ? 'Settled' : '정산 완료'} tone={s.balance > 0 ? 'bad' : 'ok'} />
-        <StatCard Icon={Users} label={en ? 'Collected from guests' : '손님 수금액'} value={php(s.guestPaid)} pill={`${php(s.guestBalance)} ${en ? 'owed' : '미수'}`} tone={s.guestBalance > 0 ? 'warn' : 'ok'} />
+        <StatCard Icon={Wallet} label={en ? 'Total hotel bill' : '호텔 총 청구액'} value={php(s.billed)} pill={`${s.count} ${en ? 'bookings' : '건'}`} tone="neutral" color="blue" />
+        <StatCard Icon={Landmark} label={en ? 'Paid to hotel' : '호텔 지급액'} value={php(s.settled)} pill={`${s.pct}%`} tone="ok" color="green" />
+        <StatCard Icon={AlertTriangle} label={en ? 'Balance due to hotel' : '호텔 미지급 잔액'} value={php(s.balance)} pill={s.balance > 0 ? (en ? 'Open' : '미정산') : en ? 'Settled' : '정산 완료'} tone={s.balance > 0 ? 'bad' : 'ok'} color={s.balance > 0 ? 'red' : 'green'} />
+        <StatCard Icon={Users} label={en ? 'Guest payments received' : '손님 결제 수령액'} value={php(s.guestPaid)} pill={`${php(s.guestBalance)} ${en ? 'unpaid' : '미결제'}`} tone={s.guestBalance > 0 ? 'warn' : 'ok'} color="amber" />
         <StatCard
           Icon={Scale}
-          label={en ? 'Rate card variance' : '요금표 차액'}
+          label={en ? 'Rate difference' : '요금 차이'}
           value={`${audit.variance > 0 ? '+' : audit.variance < 0 ? '−' : ''}${php(Math.abs(audit.variance))}`}
           pill={`${audit.mismatches.length} ${en ? 'mismatch' : '불일치'}`}
           tone={audit.mismatches.length ? 'warn' : 'ok'}
+          color="violet"
           onClick={audit.mismatches.length ? () => setShowAudit(true) : undefined}
         />
       </div>
@@ -221,6 +255,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
           <DailySettlement
             embedded
             reservations={reservations}
+            voucherSales={voucherSales}
             setReservations={setReservations}
             casinoRates={casinoRates}
             selectedMonth={month}
@@ -234,8 +269,10 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
           <div className="card p-6 flex flex-col">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h3 className="card-title flex items-center gap-2">
-                  <Landmark className="w-4 h-4 text-ink-2" />
+                <h3 className="card-title flex items-center gap-2.5">
+                  <span className="w-7 h-7 rounded-[8px] bg-ok text-white grid place-items-center">
+                    <Landmark className="w-4 h-4" strokeWidth={1.75} />
+                  </span>
                   {en ? 'Payments to Hotel' : '호텔 지급 내역'}
                 </h3>
                 <p className="text-[12.5px] text-muted mt-0.5">{en ? `Jupiter → Hotel · ${formatMonth(month)}` : `주피터 → 호텔 · ${formatMonth(month)}`}</p>
@@ -259,9 +296,13 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
                     {p.remarks && <div className="text-[11.5px] text-ink-2 truncate">{p.remarks}</div>}
                   </div>
                   <span className="num font-semibold text-ok">{php(p.amount)}</span>
-                  <button onClick={() => removeHotelPayment(p.id)} className="icon-btn hover:!text-bad" title={en ? 'Remove' : '삭제'}>
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  <RowMenu
+                    title={en ? 'Actions' : '작업'}
+                    items={[
+                      { label: en ? 'Edit' : '수정', Icon: Pencil, onClick: () => editHotelPayment(p) },
+                      { label: en ? 'Delete' : '삭제', Icon: Trash2, onClick: () => setConfirmPay({ kind: 'delete', pay: p }), danger: true },
+                    ]}
+                  />
                 </div>
               ))}
             </div>
@@ -279,8 +320,10 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
 
           {/* Guest balances */}
           <div className="card p-6 flex flex-col">
-            <h3 className="card-title flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-warn" />
+            <h3 className="card-title flex items-center gap-2.5">
+              <span className="w-7 h-7 rounded-[8px] bg-warn text-white grid place-items-center">
+                <Users className="w-4 h-4" strokeWidth={1.75} />
+              </span>
               {en ? 'Guest Balances' : '손님 미수금'}
             </h3>
             <p className="text-[12.5px] text-muted mt-0.5">{en ? 'Guests who still owe on their folio' : '청구서 잔액이 남은 손님'}</p>
@@ -305,8 +348,13 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
       <div className="card overflow-hidden mb-4">
         <div className="card-head">
           <div>
-            <h3 className="card-title">{en ? 'Settlement History' : '정산 이력'}</h3>
-            <p className="text-[12.5px] text-muted mt-0.5">{en ? 'Click a month to open it' : '월을 클릭하면 해당 월로 이동합니다'}</p>
+            <h3 className="card-title flex items-center gap-2.5">
+              <span className="w-7 h-7 rounded-[8px] bg-violet text-white grid place-items-center">
+                <History className="w-4 h-4" strokeWidth={1.75} />
+              </span>
+              {en ? 'Settlement History' : '정산 이력'}
+            </h3>
+            <p className="text-[12.5px] text-muted mt-1">{en ? 'Click a month to open it' : '월을 클릭하면 해당 월로 이동합니다'}</p>
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -316,21 +364,21 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
                 <th>{en ? 'Month' : '기준 월'}</th>
                 <th className="c">{en ? 'Bookings' : '예약'}</th>
                 <th className="c">{en ? 'Nights' : '박수'}</th>
-                <th className="r">{en ? 'Billed' : '청구액'}</th>
-                <th className="r">{en ? 'Paid to hotel' : '호텔 지급액'}</th>
-                <th className="r">{en ? 'Balance' : '잔액'}</th>
+                <th className="r !bg-accent-soft !text-accent">{en ? 'Billed' : '청구액'}</th>
+                <th className="r !bg-ok-soft !text-ok">{en ? 'Paid to hotel' : '호텔 지급액'}</th>
+                <th className="r !bg-bad-soft !text-bad">{en ? 'Balance' : '잔액'}</th>
                 <th className="c">{en ? 'Status' : '상태'}</th>
               </tr>
             </thead>
             <tbody>
               {history.map((h) => (
                 <tr key={h.month} onClick={() => setSelectedMonth(h.month)} className={`cursor-pointer ${h.month === month ? '!bg-accent-soft/60' : ''}`}>
-                  <td className="font-medium text-ink whitespace-nowrap">{formatMonth(h.month)}</td>
-                  <td className="c num">{h.count || <Dim />}</td>
+                  <td className={`font-medium text-ink whitespace-nowrap ${h.month === month ? 'shadow-[inset_3px_0_0_var(--color-accent)]' : ''}`}>{formatMonth(h.month)}</td>
+                  <td className="c num">{h.count ? <span className="inline-grid place-items-center min-w-6 h-6 px-1.5 rounded-full bg-accent-soft text-accent font-semibold">{h.count}</span> : <Dim />}</td>
                   <td className="c num">{h.nights || <Dim />}</td>
-                  <td className="r num text-ink">{h.billed ? php(h.billed) : <Dim />}</td>
-                  <td className="r num text-ok">{h.settled ? php(h.settled) : <Dim />}</td>
-                  <td className="r num">{h.balance ? <span className="text-bad font-semibold">{php(h.balance)}</span> : <Dim />}</td>
+                  <td className="r num text-accent font-semibold bg-accent-soft/30">{h.billed ? php(h.billed) : <Dim />}</td>
+                  <td className="r num text-ok font-semibold bg-ok-soft/30">{h.settled ? php(h.settled) : <Dim />}</td>
+                  <td className="r num bg-bad-soft/30">{h.balance ? <span className="text-bad font-semibold">{php(h.balance)}</span> : <Dim />}</td>
                   <td className="c">
                     {h.count === 0 ? (
                       <span className="badge badge-neutral">{en ? 'No activity' : '내역 없음'}</span>
@@ -351,7 +399,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
         <Dialog
           width="max-w-4xl"
           onClose={() => setShowAudit(false)}
-          title={en ? `Rate card variances · ${formatMonth(month)}` : `요금표 차액 · ${formatMonth(month)}`}
+          title={en ? `Rate differences · ${formatMonth(month)}` : `요금 차이 · ${formatMonth(month)}`}
           subtitle={
             en
               ? `${audit.over.length} billed above rate card · ${audit.under.length} below · net ${audit.variance >= 0 ? '+' : '−'}${php(Math.abs(audit.variance))}`
@@ -403,7 +451,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
         <Dialog
           width="max-w-md"
           onClose={() => setPayOpen(false)}
-          title={en ? 'Record payment to hotel' : '호텔 지급 기록'}
+          title={editingPay ? (en ? 'Edit payment to hotel' : '호텔 지급 수정') : en ? 'Record payment to hotel' : '호텔 지급 기록'}
           subtitle={`${formatMonth(month)} · ${en ? 'balance' : '잔액'} ${php(s.balance)}`}
         >
           <div className="px-6 py-5 grid grid-cols-2 gap-4">
@@ -437,8 +485,13 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
               </datalist>
             </div>
             <div>
-              <label className="field-label">{en ? 'Reference (bank ref / check / OR no.)' : '참조 번호'}</label>
-              <input value={payRef} onChange={(e) => setPayRef(e.target.value)} className="input" />
+              <label className="field-label">{en ? 'Reference no.' : '참조 번호'}</label>
+              <input
+                value={payRef}
+                onChange={(e) => setPayRef(e.target.value)}
+                placeholder={en ? 'Bank ref / check / OR no.' : '은행 참조 / 수표 / OR 번호'}
+                className="input"
+              />
             </div>
             <div className="col-span-2">
               <label className="field-label">{en ? 'Amount' : '금액'}</label>
@@ -448,11 +501,15 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
                   inputMode="numeric"
                   value={payAmount.toLocaleString('en-US')}
                   onChange={(e) => setPayAmount(parseInt(e.target.value.replace(/\D/g, ''), 10) || 0)}
-                  className="input num pl-7 text-[15px] font-semibold"
+                  className={`input num pl-7 text-[15px] font-semibold ${overPay ? '!border-bad' : ''}`}
                 />
               </div>
-              {payAmount > s.balance && (
-                <div className="text-[11.5px] text-warn mt-1">{en ? 'More than the balance due' : '잔액보다 많습니다'}</div>
+              {overPay ? (
+                <div className="text-[11.5px] text-bad mt-1">
+                  {en ? `Cannot be more than the bill. Max ${php(maxPay)}` : `청구액을 초과할 수 없습니다. 최대 ${php(maxPay)}`}
+                </div>
+              ) : (
+                <div className="text-[11.5px] text-muted mt-1">{en ? `Max ${php(maxPay)}` : `최대 ${php(maxPay)}`}</div>
               )}
             </div>
             <div className="col-span-2">
@@ -468,12 +525,47 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
           </div>
           <div className="px-6 py-4 border-t border-line bg-sunken flex justify-end gap-2">
             <button onClick={() => setPayOpen(false)} className="btn btn-ghost">{en ? 'Cancel' : '취소'}</button>
-            <button onClick={addHotelPayment} disabled={payAmount <= 0} className="btn btn-primary">
+            <button onClick={addHotelPayment} disabled={payAmount <= 0 || overPay} className="btn btn-primary">
               <CheckCircle2 className="w-4 h-4" />
               {en ? 'Save payment' : '저장'}
             </button>
           </div>
         </Dialog>
+      )}
+
+      {confirmPay && (
+        <ConfirmDialog
+          danger={confirmPay.kind === 'delete'}
+          title={
+            confirmPay.kind === 'delete'
+              ? en ? 'Delete payment to hotel?' : '호텔 지급을 삭제하시겠습니까?'
+              : en ? 'Save changes?' : '변경 사항을 저장하시겠습니까?'
+          }
+          message={
+            confirmPay.kind === 'delete' ? (
+              <>
+                <b className="text-ink">{php(confirmPay.pay.amount)}</b> · {formatLongDate(confirmPay.pay.date)} · {confirmPay.pay.method}
+                {confirmPay.pay.reference && ` · ${confirmPay.pay.reference}`}
+                <div className="mt-2 text-muted">{en ? 'This cannot be undone.' : '되돌릴 수 없습니다.'}</div>
+              </>
+            ) : (
+              <>
+                {en ? 'Update this payment to the hotel:' : '호텔 지급 내역 수정:'}
+                <div className="mt-2 num">
+                  <span className="text-muted line-through">{php(confirmPay.pay.amount)}</span> → <b className="text-ink">{php(payAmount)}</b>
+                </div>
+              </>
+            )
+          }
+          confirmLabel={confirmPay.kind === 'delete' ? (en ? 'Delete' : '삭제') : en ? 'Save' : '저장'}
+          cancelLabel={en ? 'Cancel' : '취소'}
+          onCancel={() => setConfirmPay(null)}
+          onConfirm={() => {
+            if (confirmPay.kind === 'delete') removeHotelPayment(confirmPay.pay.id);
+            else saveEditedPayment(confirmPay.pay);
+            setConfirmPay(null);
+          }}
+        />
       )}
 
       {folioId && reservations.find((r) => r.id === folioId) && (
@@ -501,11 +593,21 @@ const Empty: React.FC<{ text: string; ok?: boolean }> = ({ text, ok }) => (
   </div>
 );
 
+// pill text colour (the pill sits on a white chip so it reads on any card colour)
 const TONE = {
-  ok: 'bg-ok-soft text-ok',
-  warn: 'bg-warn-soft text-warn',
-  bad: 'bg-bad-soft text-bad',
-  neutral: 'bg-canvas text-ink-2',
+  ok: 'text-ok',
+  warn: 'text-warn',
+  bad: 'text-bad',
+  neutral: 'text-ink-2',
+} as const;
+
+// card colour: tinted background + border, solid icon tile
+const CARD_COLOR = {
+  blue: { card: '!bg-accent-soft !border-accent-line', icon: 'bg-accent' },
+  green: { card: '!bg-ok-soft !border-ok-line', icon: 'bg-ok' },
+  red: { card: '!bg-bad-soft !border-bad-line', icon: 'bg-bad' },
+  amber: { card: '!bg-warn-soft !border-warn-line', icon: 'bg-warn' },
+  violet: { card: '!bg-violet-soft !border-violet-line', icon: 'bg-violet' },
 } as const;
 
 const StatCard: React.FC<{
@@ -514,14 +616,15 @@ const StatCard: React.FC<{
   value: React.ReactNode;
   pill: string;
   tone: keyof typeof TONE;
+  color: keyof typeof CARD_COLOR;
   onClick?: () => void;
-}> = ({ Icon, label, value, pill, tone, onClick }) => (
+}> = ({ Icon, label, value, pill, tone, color, onClick }) => (
   <div
     onClick={onClick}
-    className={`card p-5 flex flex-col justify-between min-h-[118px] ${onClick ? 'cursor-pointer hover:border-line-strong transition-colors' : ''}`}
+    className={`card ${CARD_COLOR[color].card} p-5 flex flex-col justify-between min-h-[118px] ${onClick ? 'cursor-pointer hover:brightness-[0.98] transition' : ''}`}
   >
     <div className="flex items-center gap-3">
-      <span className="w-9 h-9 rounded-[10px] border border-line grid place-items-center text-ink-2">
+      <span className={`w-9 h-9 rounded-[10px] grid place-items-center text-white ${CARD_COLOR[color].icon}`}>
         <Icon className="w-[18px] h-[18px]" strokeWidth={1.75} />
       </span>
       <span className="text-[13px] text-ink-2">{label}</span>
@@ -529,7 +632,7 @@ const StatCard: React.FC<{
     </div>
     <div className="flex items-end justify-between gap-2 mt-4">
       <span className="num text-[22px] font-semibold leading-none tracking-tight text-ink">{value}</span>
-      <span className={`num inline-flex items-center h-6 px-2 rounded-full text-[11px] font-semibold whitespace-nowrap ${TONE[tone]}`}>{pill}</span>
+      <span className={`num inline-flex items-center h-6 px-2 rounded-full text-[11px] font-semibold whitespace-nowrap bg-surface/80 ${TONE[tone]}`}>{pill}</span>
     </div>
   </div>
 );

@@ -151,9 +151,10 @@ export function calculateCasinoStayPrice(
  * Export reservations to CSV
  */
 export function exportToCSV(reservations: Reservation[], filename = 'hotel_reservations.csv') {
-  const headers = ['Guest Name', 'Room Type', 'Check-in Date', 'Check-out Date', 'Nights', 'Amount', 'Currency', 'Ref Month', 'Payment Status', 'Remarks'];
+  const headers = ['Guest Name', 'Confirmation No.', 'Room Type', 'Check-in Date', 'Check-out Date', 'Nights', 'Amount', 'Currency', 'Ref Month', 'Payment Status', 'Remarks'];
   const rows = reservations.map((r) => [
     `"${r.guestName}"`,
+    `"${(r.confirmationNo || '').replace(/"/g, '""')}"`,
     `"${r.roomType}"`,
     `"${r.checkIn}"`,
     `"${r.checkOut}"`,

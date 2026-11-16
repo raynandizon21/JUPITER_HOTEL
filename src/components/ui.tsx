@@ -1,5 +1,6 @@
 import React from 'react';
-import { ChevronLeft, ChevronRight, MoreVertical, X } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { ChevronLeft, ChevronRight, ChevronDown, MoreVertical, X, Check, Info } from 'lucide-react';
 import { formatMonth } from '../utils/hotelHelpers';
 
 export const PageHeader: React.FC<{
@@ -54,14 +55,14 @@ export const MonthSelect: React.FC<{
   months: string[];
   allLabel?: string;
 }> = ({ value, onChange, months, allLabel }) => (
-  <select value={value} onChange={(e) => onChange(e.target.value)} className="input input-sm w-auto min-w-[150px]">
+  <Select value={value} onChange={(e) => onChange(e.target.value)} className="input input-sm w-auto min-w-[150px]">
     {allLabel !== undefined && <option value="">{allLabel}</option>}
     {months.map((m) => (
       <option key={m} value={m}>
         {formatMonth(m)}
       </option>
     ))}
-  </select>
+  </Select>
 );
 
 export const MONTHS = ['2026-09', '2026-10', '2026-11', '2026-12', '2027-01'];
@@ -77,12 +78,20 @@ export const toast = (title: string, detail?: string, tone: ToastTone = 'ok') =>
   toastListeners.forEach((l) => l(t));
 };
 
+// Soft tinted card per tone: colored border + filled icon + colored text, small × on the top-left corner.
+const TOAST_STYLE: Record<ToastTone, { Icon: React.ElementType; box: string; icon: string; text: string; close: string; ms: number }> = {
+  ok: { Icon: Check, box: 'bg-ok-soft border-ok-line', icon: 'bg-ok', text: 'text-ok', close: 'text-ok border-ok-line', ms: 3200 },
+  info: { Icon: Info, box: 'bg-info-soft border-info-line', icon: 'bg-info', text: 'text-info', close: 'text-info border-info-line', ms: 4000 },
+  bad: { Icon: X, box: 'bg-bad-soft border-bad-line', icon: 'bg-bad', text: 'text-bad', close: 'text-bad border-bad-line', ms: 6000 }, // errors stay longer
+};
+
 export const Toaster: React.FC = () => {
   const [items, setItems] = React.useState<ToastItem[]>([]);
+  const dismiss = (id: number) => setItems((prev) => prev.filter((x) => x.id !== id));
   React.useEffect(() => {
     const onToast = (t: ToastItem) => {
-      setItems((prev) => [t, ...prev]);
-      setTimeout(() => setItems((prev) => prev.filter((x) => x.id !== t.id)), 3200);
+      setItems((prev) => [t, ...prev].slice(0, 4));
+      setTimeout(() => dismiss(t.id), TOAST_STYLE[t.tone].ms);
     };
     toastListeners.add(onToast);
     return () => {
@@ -90,23 +99,33 @@ export const Toaster: React.FC = () => {
     };
   }, []);
   return (
-    <div className="fixed top-[76px] right-6 z-[70] flex flex-col gap-2 w-[320px] pointer-events-none">
-      {items.map((t) => (
-        <div
-          key={t.id}
-          role="status"
-          className="pointer-events-auto flex items-start gap-3 rounded-xl bg-ink text-white px-4 py-3 animate-fade-in"
-          style={{ boxShadow: 'var(--shadow-pop)' }}
-        >
-          <span className={`mt-0.5 w-5 h-5 shrink-0 rounded-full grid place-items-center text-[11px] font-bold ${t.tone === 'ok' ? 'bg-ok' : t.tone === 'bad' ? 'bg-bad' : 'bg-accent'}`}>
-            {t.tone === 'ok' ? '✓' : t.tone === 'bad' ? '−' : 'i'}
-          </span>
-          <div className="min-w-0">
-            <div className="text-[13px] font-medium">{t.title}</div>
-            {t.detail && <div className="text-[12px] text-white/65 mt-0.5">{t.detail}</div>}
+    <div className="fixed top-[84px] right-5 z-[70] flex flex-col gap-3 w-[360px] pointer-events-none">
+      {items.map((t) => {
+        const st = TOAST_STYLE[t.tone];
+        return (
+          <div
+            key={t.id}
+            role={t.tone === 'bad' ? 'alert' : 'status'}
+            className={`toast pointer-events-auto relative rounded-xl border flex items-center gap-3 px-4 py-3.5 ${st.box}`}
+            style={{ boxShadow: '0 6px 18px -8px rgb(17 18 20 / 0.18)' }}
+          >
+            <button
+              onClick={() => dismiss(t.id)}
+              aria-label="Close"
+              className={`absolute -top-2 -left-2 w-5 h-5 rounded-full bg-surface border grid place-items-center cursor-pointer hover:scale-110 transition-transform ${st.close}`}
+            >
+              <X className="w-3 h-3" strokeWidth={2.5} />
+            </button>
+            <span className={`w-6 h-6 shrink-0 rounded-full grid place-items-center text-white ${st.icon}`}>
+              <st.Icon className="w-3.5 h-3.5" strokeWidth={3} />
+            </span>
+            <div className={`min-w-0 flex-1 ${st.text}`}>
+              <div className="text-[13.5px] font-semibold leading-snug">{t.title}</div>
+              {t.detail && <div className="text-[12.5px] font-medium opacity-80 mt-0.5 leading-snug break-words">{t.detail}</div>}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 };
@@ -221,20 +240,20 @@ export const Pager: React.FC<{
       {onSize && (
         <label className="flex items-center gap-1.5 text-muted">
           {en ? 'Show' : '표시'}
-          <select
+          <Select
             value={size}
             onChange={(e) => {
               onSize(Number(e.target.value));
               onPage(0);
             }}
-            className="input input-sm !h-7 !w-auto !py-0 pr-7"
+            className="input input-sm !h-7 !w-auto !py-0 !px-2.5"
           >
             {sizes.map((n) => (
               <option key={n} value={n}>
                 {n}
               </option>
             ))}
-          </select>
+          </Select>
           {en ? 'per page' : '개씩'}
         </label>
       )}
@@ -260,3 +279,263 @@ export const Pager: React.FC<{
     )}
   </div>
 );
+
+/**
+ * Text input with the app's own suggestion dropdown (instead of <datalist>, which the browser
+ * draws in its own — often black — style). Free text is allowed; suggestions filter as you type.
+ * Keyboard: ↑ ↓ to move, Enter to pick, Esc to close.
+ */
+export const ComboInput: React.FC<{
+  value: string;
+  onChange: (v: string) => void;
+  options: string[];
+  placeholder?: string;
+  className?: string;
+  autoFocus?: boolean;
+  maxLength?: number;
+  emptyText?: string;
+}> = ({ value, onChange, options, placeholder, className = '', autoFocus, maxLength, emptyText }) => {
+  const [open, setOpen] = React.useState(false);
+  const [hi, setHi] = React.useState(0);
+  const box = React.useRef<HTMLDivElement>(null);
+  const listRef = React.useRef<HTMLDivElement>(null);
+  const style = useFloating(box, open);
+  useOutsideClose(open, [box, listRef], () => setOpen(false));
+  const q = value.trim().toLowerCase();
+  const list = React.useMemo(() => {
+    const uniq = Array.from(new Set(options.filter(Boolean)));
+    const hits = q ? uniq.filter((o) => o.toLowerCase().includes(q)) : uniq;
+    // names that start with what was typed come first
+    return hits.sort((a, b) => Number(!a.toLowerCase().startsWith(q)) - Number(!b.toLowerCase().startsWith(q)) || a.localeCompare(b)).slice(0, 8);
+  }, [options, q]);
+  React.useEffect(() => setHi(0), [q]);
+  const exact = list.some((o) => o.toLowerCase() === q);
+  const pick = (v: string) => {
+    onChange(v);
+    setOpen(false);
+  };
+
+  return (
+    <div ref={box} className="relative">
+      <input
+        type="text"
+        value={value}
+        autoFocus={autoFocus}
+        maxLength={maxLength}
+        placeholder={placeholder}
+        onFocus={() => setOpen(true)}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setOpen(true);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            setOpen(true);
+            setHi((h) => Math.min(h + 1, list.length - 1));
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setHi((h) => Math.max(h - 1, 0));
+          } else if (e.key === 'Enter' && open && list[hi] && !exact) {
+            e.preventDefault();
+            pick(list[hi]);
+          } else if (e.key === 'Escape' && open) {
+            e.stopPropagation();
+            setOpen(false);
+          }
+        }}
+        className={`input pr-8 ${className}`}
+        autoComplete="off"
+      />
+      <button
+        type="button"
+        tabIndex={-1}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => setOpen((o) => !o)}
+        className="absolute right-1.5 top-1/2 -translate-y-1/2 w-6 h-6 grid place-items-center text-faint hover:text-ink-2 cursor-pointer"
+        aria-label="Show suggestions"
+      >
+        <ChevronDown className={`w-3.5 h-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (list.length > 0 || emptyText) && (
+        <DropList
+          style={style}
+          listRef={listRef}
+          items={list.map((o) => ({ key: o, label: o, selected: o.toLowerCase() === q }))}
+          hi={hi}
+          setHi={setHi}
+          onPick={(i) => pick(list[i])}
+          empty={emptyText}
+        />
+      )}
+    </div>
+  );
+};
+
+// ---------- Dropdowns ----------
+/**
+ * Position of a dropdown list under (or above, if there's no room) its trigger. The list is drawn
+ * in a portal with position: fixed, so cards / dialogs with overflow: hidden never cut it off.
+ */
+const useFloating = (anchor: React.RefObject<HTMLElement | null>, open: boolean, maxH = 240) => {
+  const [style, setStyle] = React.useState<React.CSSProperties>({});
+  React.useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const r = anchor.current?.getBoundingClientRect();
+      if (!r) return;
+      const below = window.innerHeight - r.bottom;
+      const up = below < Math.min(maxH, 160) + 12 && r.top > below;
+      setStyle({
+        position: 'fixed',
+        left: r.left,
+        minWidth: r.width,
+        zIndex: 80,
+        maxHeight: Math.min(maxH, (up ? r.top : below) - 12),
+        ...(up ? { bottom: window.innerHeight - r.top + 4 } : { top: r.bottom + 4 }),
+      });
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+    };
+  }, [anchor, open, maxH]);
+  return style;
+};
+
+const useOutsideClose = (open: boolean, refs: React.RefObject<HTMLElement | null>[], close: () => void) => {
+  React.useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (refs.every((r) => !r.current || !r.current.contains(e.target as Node))) close();
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+};
+
+/** The shared dropdown list look (white card, grey highlight, ✓ on the selected item). */
+const DropList: React.FC<{
+  style: React.CSSProperties;
+  listRef: React.RefObject<HTMLDivElement | null>;
+  items: { key: string; label: React.ReactNode; selected: boolean }[];
+  hi: number;
+  setHi: (i: number) => void;
+  onPick: (i: number) => void;
+  empty?: React.ReactNode;
+}> = ({ style, listRef, items, hi, setHi, onPick, empty }) =>
+  createPortal(
+    <div ref={listRef} style={{ ...style, boxShadow: 'var(--shadow-pop)' }} className="card !rounded-xl p-1 overflow-y-auto animate-scale-in">
+      {items.length === 0 ? (
+        <div className="px-3 py-2 text-[12.5px] text-muted">{empty}</div>
+      ) : (
+        items.map((it, i) => (
+          <button
+            key={it.key}
+            type="button"
+            data-i={i}
+            onMouseDown={(e) => e.preventDefault()}
+            onMouseEnter={() => setHi(i)}
+            onClick={() => onPick(i)}
+            className={`w-full flex items-center justify-between gap-3 px-3 py-2 rounded-lg text-left text-[13px] whitespace-nowrap cursor-pointer ${
+              i === hi ? 'bg-canvas text-ink' : it.selected ? 'text-ink font-medium' : 'text-ink-2'
+            }`}
+          >
+            <span className="truncate">{it.label}</span>
+            {it.selected && <Check className="w-3.5 h-3.5 text-accent shrink-0" />}
+          </button>
+        ))
+      )}
+    </div>,
+    document.body
+  );
+
+type OptionEl = React.ReactElement<{ value?: string | number; children?: React.ReactNode; disabled?: boolean }>;
+
+/**
+ * Drop-in replacement for <select>: same props (value, onChange(e), className, <option> children),
+ * drawn with the app's own dropdown list instead of the browser's.
+ */
+export const Select: React.FC<{
+  value: string | number;
+  onChange: (e: { target: { value: string } }) => void;
+  className?: string;
+  disabled?: boolean;
+  title?: string;
+  children: React.ReactNode;
+}> = ({ value, onChange, className = 'input', disabled, title, children }) => {
+  const opts = React.Children.toArray(children)
+    .filter((c): c is OptionEl => React.isValidElement(c))
+    .map((c) => ({
+      value: String(c.props.value ?? (typeof c.props.children === 'string' ? c.props.children : '')),
+      label: c.props.children,
+      disabled: !!c.props.disabled,
+    }));
+  const cur = opts.findIndex((o) => o.value === String(value));
+  const [open, setOpen] = React.useState(false);
+  const [hi, setHi] = React.useState(0);
+  const btn = React.useRef<HTMLButtonElement>(null);
+  const list = React.useRef<HTMLDivElement>(null);
+  const style = useFloating(btn, open);
+  useOutsideClose(open, [btn, list], () => setOpen(false));
+  React.useEffect(() => {
+    if (open) {
+      setHi(Math.max(cur, 0));
+      requestAnimationFrame(() => list.current?.querySelector(`[data-i="${Math.max(cur, 0)}"]`)?.scrollIntoView({ block: 'nearest' }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const pick = (i: number) => {
+    const o = opts[i];
+    if (!o || o.disabled) return;
+    if (o.value !== String(value)) onChange({ target: { value: o.value } });
+    setOpen(false);
+    btn.current?.focus();
+  };
+
+  return (
+    <>
+      <button
+        ref={btn}
+        type="button"
+        title={title}
+        disabled={disabled}
+        onClick={() => setOpen((o) => !o)}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (!open) return setOpen(true);
+            setHi((h) => Math.min(Math.max(h + (e.key === 'ArrowDown' ? 1 : -1), 0), opts.length - 1));
+          } else if ((e.key === 'Enter' || e.key === ' ') && open) {
+            e.preventDefault();
+            pick(hi);
+          } else if (e.key === 'Escape' && open) {
+            e.stopPropagation();
+            setOpen(false);
+          }
+        }}
+        className={`${className} !flex items-center justify-between gap-2 text-left cursor-pointer disabled:cursor-not-allowed disabled:opacity-60`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span className="truncate">{cur >= 0 ? opts[cur].label : ''}</span>
+        <ChevronDown className={`w-3.5 h-3.5 shrink-0 text-faint transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <DropList
+          style={style}
+          listRef={list}
+          items={opts.map((o, i) => ({ key: `${o.value}-${i}`, label: o.label, selected: i === cur }))}
+          hi={hi}
+          setHi={setHi}
+          onPick={pick}
+        />
+      )}
+    </>
+  );
+};

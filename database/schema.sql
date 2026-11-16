@@ -67,6 +67,21 @@ CREATE TABLE IF NOT EXISTS `addon_rates` (
 ) ENGINE=InnoDB;
 
 
+-- 3b) Agents — file maintenance list (Agents page). A new name typed in the
+--     booking form is added here automatically when the booking is saved.
+CREATE TABLE IF NOT EXISTS `agents` (
+  `IDNo`        INT          NOT NULL AUTO_INCREMENT,
+  `AGENT_NAME`  VARCHAR(100) NOT NULL,
+  `ACTIVE`      TINYINT(1)   NOT NULL DEFAULT 1 COMMENT '0 = hidden from suggestions',
+  `CREATED_DT`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `CREATED_BY`  INT          NOT NULL,
+  `EDITED_DT`   DATETIME     NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`IDNo`),
+  UNIQUE KEY `uq_agents_name` (`AGENT_NAME`),
+  CONSTRAINT `fk_agents_user` FOREIGN KEY (`CREATED_BY`) REFERENCES `users` (`IDNo`)
+) ENGINE=InnoDB;
+
+
 -- 4) Bookings (Guest Ledger, Calendar, Daily Settlement, Dashboard) ----
 --    Guest total  = ROOM_AMOUNT + SUM(booking_charges.AMOUNT)
 --    Guest paid   = SUM(booking_payments.AMOUNT)
@@ -77,9 +92,11 @@ CREATE TABLE IF NOT EXISTS `booking` (
   `CONFIRM_NUM`    VARCHAR(50)   NULL COMMENT 'hotel confirmation number, typed in by staff (unique)',
   `ACCT_NUM`       VARCHAR(50)   NULL COMMENT 'optional account no.',
   `GUEST_NAME`     VARCHAR(150)  NOT NULL,
+  `AGENT_ID`       INT           NULL COMMENT 'agents.IDNo',
   `ROOM_TYPE_ID`   INT           NOT NULL,
   `OCCUPANCY`      ENUM('singleDouble','triple') NOT NULL DEFAULT 'singleDouble',
   `HOLIDAY_DATES`  JSON          NULL COMMENT 'nights charged at holiday (weekend) rate, e.g. ["2026-11-19"]',
+  `COMP_DATES`     JSON          NULL COMMENT 'complimentary (free) nights, charged 0',
   `CHECK_IN`       DATE          NOT NULL,
   `CHECK_OUT`      DATE          NOT NULL,
   `NIGHTS`         INT           AS (DATEDIFF(`CHECK_OUT`, `CHECK_IN`)) STORED,
@@ -116,6 +133,7 @@ CREATE TABLE IF NOT EXISTS `booking_charges` (
   `DESCRIPTION`  VARCHAR(200)  NOT NULL,
   `QTY`          INT           NOT NULL DEFAULT 1,
   `UNIT_PRICE`   DECIMAL(12,2) NOT NULL,
+  `IS_FREE`      TINYINT(1)    NOT NULL DEFAULT 0 COMMENT '1 = complimentary, charged 0',
   `AMOUNT`       DECIMAL(12,2) AS (`QTY` * `UNIT_PRICE`) STORED,
   `CREATED_DT`   DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `CREATED_BY`   INT           NOT NULL,
@@ -174,6 +192,7 @@ CREATE TABLE IF NOT EXISTS `voucher_sales` (
   `SALE_DATE`   DATE         NOT NULL,
   `REF_MONTH`   CHAR(7)      AS (CONCAT(YEAR(`SALE_DATE`), '-', LPAD(MONTH(`SALE_DATE`), 2, '0'))) STORED,
   `GUEST_NAME`  VARCHAR(150) NOT NULL,
+  `AGENT_ID`    INT          NULL COMMENT 'agents.IDNo',
   `REMARKS`     VARCHAR(500) NULL,
   `ACTIVE`      TINYINT(1)   NOT NULL DEFAULT 1 COMMENT '0 = deleted',
   `CREATED_DT`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -192,6 +211,7 @@ CREATE TABLE IF NOT EXISTS `voucher_sale_items` (
   `DESCRIPTION` VARCHAR(200)  NOT NULL,
   `QTY`         INT           NOT NULL DEFAULT 1,
   `UNIT_PRICE`  DECIMAL(12,2) NOT NULL,
+  `IS_FREE`     TINYINT(1)    NOT NULL DEFAULT 0 COMMENT '1 = complimentary, charged 0',
   `AMOUNT`      DECIMAL(12,2) AS (`QTY` * `UNIT_PRICE`) STORED,
   PRIMARY KEY (`IDNo`),
   KEY `idx_voucher_items_sale` (`SALE_ID`),
@@ -226,13 +246,17 @@ VALUES (1, 'system', 'System', '!', 'admin');
 INSERT IGNORE INTO `room_types`
   (`ROOM_CODE`, `ROOM_NAME`, `WEEKDAY_RATE_SINGLE_DOUBLE`, `WEEKDAY_RATE_TRIPLE`, `WEEKEND_RATE_SINGLE_DOUBLE`, `WEEKEND_RATE_TRIPLE`, `SORT_ORDER`)
 VALUES
-  ('guest_room',                'GUEST ROOM',                      6050,  7700,  6600,  8250, 1),
-  ('guest_room_pool_view',      'GUEST ROOM POOL VIEW',            7590,  9240,  8250,  9900, 2),
-  ('executive_room',            'EXECUTIVE ROOM',                 10340, 11990, 11000, 12650, 3),
-  ('executive_room_balcony',    'EXECUTIVE ROOM WITH BALCONY',    12155, 13805, 13365, 15015, 4),
-  ('one_bedroom_suite',         'ONE BEDROOM SUITE',              14575, 16225, 15235, 16885, 5),
-  ('one_bedroom_suite_balcony', 'ONE BEDROOM SUITE WITH BALCONY', 17490, 19140, 18150, 19800, 6),
-  ('governor_suite',            'GOVERNOR SUITE',                 29590, 31240, 30250, 31900, 7);
+  ('guest_room',                'GUEST ROOM',                      6050,  7700,  6600,  8250,  1),
+  ('guest_room_king',           'GUEST ROOM KING BED',             6050,  7700,  6600,  8250,  2),
+  ('guest_room_twin',           'GUEST ROOM TWIN BED',             6050,  7700,  6600,  8250,  3),
+  ('guest_room_pool_view',      'GUEST ROOM POOL VIEW',            7590,  9240,  8250,  9900,  4),
+  ('guest_room_king_pool_view', 'GUEST ROOM KING POOL VIEW',       7590,  9240,  8250,  9900,  5),
+  ('guest_room_twin_pool_view', 'GUEST ROOM TWIN POOL VIEW',       7590,  9240,  8250,  9900,  6),
+  ('executive_room',            'EXECUTIVE ROOM',                 10340, 11990, 11000, 12650,  7),
+  ('executive_room_balcony',    'EXECUTIVE ROOM WITH BALCONY',    12155, 13805, 13365, 15015,  8),
+  ('one_bedroom_suite',         'ONE BEDROOM SUITE',              14575, 16225, 15235, 16885,  9),
+  ('one_bedroom_suite_balcony', 'ONE BEDROOM SUITE WITH BALCONY', 17490, 19140, 18150, 19800, 10),
+  ('governor_suite',            'GOVERNOR SUITE',                 29590, 31240, 30250, 31900, 11);
 
 INSERT IGNORE INTO `addon_rates` (`ADDON_CODE`, `ADDON_NAME`, `PRICE`)
 VALUES

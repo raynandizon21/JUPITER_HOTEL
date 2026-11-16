@@ -6,15 +6,17 @@ import { GuestReservationLedger } from './components/GuestReservationLedger';
 import { ReservationCalendar } from './components/ReservationCalendar';
 import { RoomRatesMaintenance } from './components/RoomRatesMaintenance';
 import { RateCalculator } from './components/RateCalculator';
+import { AgentsMaintenance } from './components/AgentsMaintenance';
 import { LanguageSelector } from './components/LanguageSelector';
 import jupiterLogo from './logo.jpg';
 import { Home as HomeIcon, Plus } from 'lucide-react';
 import { Toaster, toast } from './components/ui';
-import { ActiveModule, CasinoRatesConfig, FolioCharge, Reservation, Settlement, VoucherSale } from './types/hotel';
+import { ActiveModule, Agent, CasinoRatesConfig, FolioCharge, Reservation, Settlement, VoucherSale } from './types/hotel';
 import { migrateReservation, syncStatus } from './utils/billing';
 import { api, ServerState } from './utils/api';
 import { defaultCasinoRates } from './data/initialData';
 import { Language } from './i18n/translations';
+import { nightsLabel } from './utils/hotelHelpers';
 
 // Old browser-only data keys: read once and moved into MySQL (see importLocalData).
 const STORAGE_KEY_CASINO_RATES = 'hotel_casino_rates_v2';
@@ -86,6 +88,8 @@ export default function App() {
   const [settlements, setSettlements] = useState<Settlement[]>([]);
   // Vouchers bought without a room booking (for the record)
   const [voucherSales, setVoucherSales] = useState<VoucherSale[]>([]);
+  // Agents file maintenance (suggestions in the booking form)
+  const [agents, setAgents] = useState<Agent[]>([]);
   const [dbStatus, setDbStatus] = useState<'loading' | 'ready' | 'error'>('loading');
 
   // What the server already has (JSON per id / month), so only real changes are sent.
@@ -113,6 +117,7 @@ export default function App() {
         setReservations(res);
         setSettlements(state.settlements);
         setVoucherSales(vouchers);
+        setAgents(state.agents || []);
         setCasinoRates(rates);
         setDbStatus('ready');
         if (imported) toast(language === 'en' ? 'Saved data moved to the database' : '저장된 데이터를 DB로 옮겼습니다', `${imported}`, 'info');
@@ -146,10 +151,14 @@ export default function App() {
       const json = JSON.stringify(r);
       if (syncedRes.current.get(r.id) === json) continue;
       syncedRes.current.set(r.id, json);
-      api.saveReservation(r).catch((e) => {
-        syncedRes.current.delete(r.id); // retry on the next change
-        syncFailed(e);
-      });
+      api
+        .saveReservation(r)
+        // a new agent name is added to the Agents list by the server — refresh the suggestions
+        .then(() => (r.agentName ? api.listAgents().then(setAgents) : undefined))
+        .catch((e) => {
+          syncedRes.current.delete(r.id); // retry on the next change
+          syncFailed(e);
+        });
     }
     for (const id of [...syncedRes.current.keys()]) {
       if (seen.has(id)) continue;
@@ -200,10 +209,13 @@ export default function App() {
       const json = JSON.stringify(v);
       if (syncedVouchers.current.get(v.id) === json) continue;
       syncedVouchers.current.set(v.id, json);
-      api.saveVoucherSale(v).catch((e) => {
-        syncedVouchers.current.delete(v.id); // retry on the next change
-        syncFailed(e);
-      });
+      api
+        .saveVoucherSale(v)
+        .then(() => (v.agentName ? api.listAgents().then(setAgents) : undefined))
+        .catch((e) => {
+          syncedVouchers.current.delete(v.id); // retry on the next change
+          syncFailed(e);
+        });
     }
     for (const id of [...syncedVouchers.current.keys()]) {
       if (seen.has(id)) continue;
@@ -251,7 +263,7 @@ export default function App() {
       isJupiterGuest: true,
     };
     setReservations((prev) => [newRes, ...prev]);
-    toast(language === 'en' ? 'Reservation saved' : '예약 저장됨', `${newRes.guestName} · ${newRes.nights} ${language === 'en' ? 'nights' : '박'} · ₱${newRes.amount.toLocaleString()}`);
+    toast(language === 'en' ? 'Reservation saved' : '예약 저장됨', `${newRes.guestName} · ${nightsLabel(newRes.nights, language === 'en')} · ₱${newRes.amount.toLocaleString()}`);
     setSelectedMonth(newRes.referenceMonth);
     setActiveModule('ledger');
   };
@@ -268,6 +280,7 @@ export default function App() {
         <GuestReservationLedger
           formOnly
           autoOpenNew
+          agents={agents}
           reservations={reservations}
           setReservations={setReservations}
           voucherSales={voucherSales}
@@ -403,6 +416,7 @@ export default function App() {
                 key={ledgerTab}
                 initialTab={ledgerTab}
                 highlightId={highlightId}
+                agents={agents}
                 reservations={reservations}
                 setReservations={setReservations}
                 voucherSales={voucherSales}
@@ -432,6 +446,8 @@ export default function App() {
                 language={language}
               />
             )}
+
+            {activeModule === 'agents' && <AgentsMaintenance agents={agents} setAgents={setAgents} language={language} />}
 
             {activeModule === 'calculator' && (
               <RateCalculator

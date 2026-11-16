@@ -62,14 +62,17 @@ export async function exportSettlementExcel(month: string, bookings: Reservation
 
   const rateLabel = (r: Reservation) => {
     const holidays = r.holidayDates || [];
-    let wd = 0, we = 0, ho = 0;
+    const comps = r.compDates || [];
+    let wd = 0, we = 0, ho = 0, co = 0;
     getStayNights(r.checkIn, r.checkOut).forEach((d) => {
-      if (getDayCategory(d) === 'weekend') we++;
+      if (comps.includes(d)) co++;
+      else if (getDayCategory(d) === 'weekend') we++;
       else if (holidays.includes(d)) ho++;
       else wd++;
     });
     const parts = [wd && 'WEEKDAY', we && 'WEEKEND', ho && 'HOLIDAY'].filter(Boolean) as string[];
-    return parts.length ? `${parts.join(' + ')} RATE` : 'ROOM RATE';
+    const label = parts.length ? `${parts.join(' + ')} RATE` : co ? 'COMPLIMENTARY' : 'ROOM RATE';
+    return co && parts.length ? `${label} + ${co} FREE` : label;
   };
   type Line = { guest: string; date: string; amount: number; type: string; rate: string; qty: number; details: string };
   const lines: Line[] = [];
@@ -80,11 +83,11 @@ export async function exportSettlementExcel(month: string, bookings: Reservation
       lines.push({
         guest: r.guestName,
         date: c.date,
-        amount: c.qty * c.unitPrice,
+        amount: c.free ? 0 : c.qty * c.unitPrice,
         type: cat === 'buffet' ? 'BUFFET' : cat === 'extraBed' ? 'EXTRA BED' : 'OTHER',
-        rate: cat === 'buffet' ? 'RESTAURANT' : cat === 'extraBed' ? 'ADD-ON' : 'MISC',
+        rate: c.free ? 'COMPLIMENTARY' : cat === 'buffet' ? 'RESTAURANT' : cat === 'extraBed' ? 'ADD-ON' : 'MISC',
         qty: c.qty,
-        details: c.description,
+        details: c.free ? `${c.description} (free)` : c.description,
       });
     });
   });
@@ -210,7 +213,9 @@ export async function exportSettlementExcel(month: string, bookings: Reservation
   bookings.forEach((r) =>
     (r.charges || []).forEach((c) => {
       const row = ex.getRow(er++);
-      row.values = [r.guestName, toDate(c.date), c.description, c.qty, c.unitPrice, { formula: `D${er - 1}*E${er - 1}`, result: c.qty * c.unitPrice }];
+      row.values = c.free
+        ? [r.guestName, toDate(c.date), `${c.description} (free)`, c.qty, c.unitPrice, 0]
+        : [r.guestName, toDate(c.date), c.description, c.qty, c.unitPrice, { formula: `D${er - 1}*E${er - 1}`, result: c.qty * c.unitPrice }];
       row.getCell(2).numFmt = DATE;
       row.getCell(5).numFmt = PESO;
       row.getCell(6).numFmt = PESO;

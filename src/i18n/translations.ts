@@ -10,7 +10,6 @@ export const translations = {
     navMaintenance: 'Room Rates',
     navCalculator: 'Rate Calculator',
 
-    nightsUnit: 'nights',
 
     // Ledger
     ledgerTitle: 'Guest Ledger',
@@ -64,7 +63,6 @@ export const translations = {
     navMaintenance: '객실 요금표',
     navCalculator: '숙박 요금 계산기',
 
-    nightsUnit: '박',
 
     // Ledger
     ledgerTitle: '예약 관리부',

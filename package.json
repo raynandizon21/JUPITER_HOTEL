@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "db:init": "node scripts/init-db.mjs"
+    "db:init": "node scripts/init-db.mjs",
+    "dev:api": "node --env-file=.env --watch-path=server server/index.js",
+    "dev:all": "node scripts/init-db.mjs && node scripts/dev-all.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

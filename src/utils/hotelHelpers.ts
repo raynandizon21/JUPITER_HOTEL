@@ -95,8 +95,10 @@ export function getDayCategory(dateStr: string, holidayDates: string[] = []): 'w
 export interface NightRate {
   date: string;
   kind: 'weekday' | 'weekend' | 'holiday';
-  rate: number;
+  rate: number; // what is charged (0 on a complimentary night)
   baseRate: number; // rate before any holiday override (= rate unless kind is 'holiday')
+  listRate: number; // rate before the complimentary discount (holiday rate included)
+  comp: boolean; // complimentary (free) night
 }
 
 /** Night-by-night room charges for a stay. */
@@ -106,7 +108,8 @@ export function getNightlyRates(
   roomId: string,
   occupancy: 'singleDouble' | 'triple',
   casinoRates: CasinoRatesConfig,
-  holidayDates: string[] = []
+  holidayDates: string[] = [],
+  compDates: string[] = []
 ): NightRate[] {
   const room = casinoRates.rooms.find((r) => r.id === roomId) || casinoRates.rooms[0];
   if (!room) return [];
@@ -116,8 +119,9 @@ export function getNightlyRates(
     const weekday = occupancy === 'singleDouble' ? room.singleDoubleWeekday : room.tripleWeekday;
     const weekend = occupancy === 'singleDouble' ? room.singleDoubleWeekend : room.tripleWeekend;
     const baseRate = natural === 'weekend' ? weekend : weekday;
-    const rate = natural === 'weekend' || holiday ? weekend : weekday;
-    return { date, kind: holiday ? 'holiday' : natural, rate, baseRate };
+    const listRate = natural === 'weekend' || holiday ? weekend : weekday;
+    const comp = compDates.includes(date);
+    return { date, kind: holiday ? 'holiday' : natural, rate: comp ? 0 : listRate, baseRate, listRate, comp };
   });
 }
 
@@ -135,9 +139,10 @@ export function calculateCasinoStayPrice(
     dinnerCount: 0,
     extraBedCount: 0,
   },
-  holidayDates: string[] = []
+  holidayDates: string[] = [],
+  compDates: string[] = []
 ): { total: number; roomTotal: number; voucherTotal: number; nights: number } {
-  const nightly = getNightlyRates(checkIn, checkOut, roomId, occupancy, casinoRates, holidayDates);
+  const nightly = getNightlyRates(checkIn, checkOut, roomId, occupancy, casinoRates, holidayDates, compDates);
   const nights = nightly.length;
   const roomTotal = nightly.reduce((a, n) => a + n.rate, 0);
   const voucherTotal =
@@ -174,4 +179,9 @@ export function exportToCSV(reservations: Reservation[], filename = 'hotel_reser
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+}
+
+/** "1 night" / "3 nights" (English), "3박" (Korean). */
+export function nightsLabel(n: number, en = true): string {
+  return en ? `${n} ${n === 1 ? 'night' : 'nights'}` : `${n}박`;
 }

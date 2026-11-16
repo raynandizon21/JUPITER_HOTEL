@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutGrid, CalendarRange, BookOpenText, CalendarDays, SlidersHorizontal, Calculator, Menu, Trash2 } from 'lucide-react';
+import { LayoutGrid, CalendarRange, BookOpenText, CalendarDays, SlidersHorizontal, Calculator, Menu, UserRound, Trash2 } from 'lucide-react';
 import { ActiveModule } from '../types/hotel';
 import { Language, translations } from '../i18n/translations';
 
@@ -38,6 +38,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeModule, setActiveModule,
         { id: 'maintenance', label: t.navMaintenance, Icon: SlidersHorizontal },
         { id: 'calculator', label: t.navCalculator, Icon: Calculator },
       ],
+    },
+    {
+      label: en ? 'File maintenance' : '기초 정보',
+      items: [{ id: 'agents', label: en ? 'Agents' : '에이전트', Icon: UserRound }],
     },
   ];
 

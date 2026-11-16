@@ -1,10 +1,10 @@
 import React, { useState, useMemo } from 'react';
 import { CasinoRatesConfig, FolioCharge } from '../types/hotel';
 import { uid, peso, todayISO } from '../utils/billing';
-import { getNightlyRates, addDays, formatLongDate, formatDateRange } from '../utils/hotelHelpers';
+import { getNightlyRates, addDays, formatLongDate, formatDateRange, nightsLabel } from '../utils/hotelHelpers';
 import { ArrowRight, Utensils, Coffee, BedDouble, Minus, Plus } from 'lucide-react';
 import { Language } from '../i18n/translations';
-import { PageHeader } from './ui';
+import { PageHeader, Select } from './ui';
 
 interface RateCalculatorProps {
   casinoRates: CasinoRatesConfig;
@@ -86,7 +86,7 @@ export const RateCalculator: React.FC<RateCalculatorProps> = ({
       charges: [
         { label: 'Breakfast voucher', qty: extraBreakfastCount, price: casinoRates.vouchers.breakfast },
         { label: 'Dinner voucher', qty: dinnerVoucherCount, price: casinoRates.vouchers.dinner },
-        { label: `Extra bed (${totalNights} nights)`, qty: extraBedCount * totalNights, price: casinoRates.vouchers.extraBed },
+        { label: `Extra bed (${nightsLabel(totalNights)})`, qty: extraBedCount * totalNights, price: casinoRates.vouchers.extraBed },
       ]
         .filter((c) => c.qty > 0)
         .map((c) => ({ id: uid(), date: checkIn, description: c.label, qty: c.qty, unitPrice: c.price, category: c.label.startsWith('Extra bed') ? ('extraBed' as const) : ('buffet' as const) })),
@@ -147,11 +147,11 @@ export const RateCalculator: React.FC<RateCalculatorProps> = ({
             </div>
             <div className="col-span-2 sm:col-span-1">
               <label className="field-label">{en ? 'Room type' : '객실 타입'}</label>
-              <select value={casinoRoomId} onChange={(e) => setCasinoRoomId(e.target.value)} className="input">
+              <Select value={casinoRoomId} onChange={(e) => setCasinoRoomId(e.target.value)} className="input">
                 {casinoRates.rooms.map((r) => (
                   <option key={r.id} value={r.id}>{r.name}</option>
                 ))}
-              </select>
+              </Select>
             </div>
             <div>
               <label className="field-label">{en ? 'Check-in' : '체크인'}</label>

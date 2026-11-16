@@ -1,4 +1,4 @@
-import { FolioPayment, PaymentMethod, Reservation, Settlement, VoucherSale } from '../types/hotel';
+import { FolioPayment, PaymentMethod, Reservation, Settlement, VoucherSale, FolioCharge } from '../types/hotel';
 
 export const PAYMENT_METHODS: PaymentMethod[] = ['Cash', 'Bank Transfer', 'GCash', 'Credit Card', 'Junket Account'];
 
@@ -10,9 +10,12 @@ export const todayISO = () => {
 
 export type BillStatus = 'paid' | 'partial' | 'unpaid';
 
+/** Amount of one charge line — ₱0 when it is complimentary (free). */
+export const chargeAmount = (c: FolioCharge) => (c.free ? 0 : c.qty * c.unitPrice);
+
 /** Guest folio totals: room charge (reservation.amount) + extra charges − payments. */
 export function folioOf(r: Reservation) {
-  const extras = (r.charges || []).reduce((a, c) => a + c.qty * c.unitPrice, 0);
+  const extras = (r.charges || []).reduce((a, c) => a + chargeAmount(c), 0);
   const total = r.amount + extras;
   const paid = (r.payments || []).reduce((a, p) => a + p.amount, 0);
   const balance = total - paid;
@@ -22,7 +25,7 @@ export function folioOf(r: Reservation) {
 
 /** Totals for a voucher-only purchase (same shape as folioOf, without a room charge). */
 export function voucherTotals(v: VoucherSale) {
-  const total = v.items.reduce((a, c) => a + c.qty * c.unitPrice, 0);
+  const total = v.items.reduce((a, c) => a + chargeAmount(c), 0);
   const paid = v.payments.reduce((a, p) => a + p.amount, 0);
   const balance = total - paid;
   const status: BillStatus = balance <= 0 ? 'paid' : paid > 0 ? 'partial' : 'unpaid';

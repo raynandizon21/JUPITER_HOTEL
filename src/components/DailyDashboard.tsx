@@ -4,10 +4,10 @@ import { Reservation, CasinoRatesConfig, Settlement, PaymentMethod, FolioPayment
 import { folioOf, settlementOf, PAYMENT_METHODS, uid, todayISO, printDocument, escapeHtml as esc } from '../utils/billing';
 import { GuestFolio } from './GuestFolio';
 import { exportSettlementExcel } from '../utils/excelExport';
-import { formatCurrency, calculateCasinoStayPrice, formatLongDate, formatMonth, formatDateRange } from '../utils/hotelHelpers';
+import { formatCurrency, calculateCasinoStayPrice, formatLongDate, formatMonth, formatDateRange, nightsLabel } from '../utils/hotelHelpers';
 import { FileSpreadsheet, AlertTriangle, CheckCircle2, ArrowUpRight, Printer, Wallet, Scale, Landmark, Plus, Pencil, Trash2, Receipt, Users, History } from 'lucide-react';
 import { Language } from '../i18n/translations';
-import { PageHeader, Dialog, ConfirmDialog, MonthSelect, MONTHS, RowMenu, toast } from './ui';
+import { PageHeader, Dialog, ConfirmDialog, MonthSelect, MONTHS, RowMenu, toast, ComboInput, Select } from './ui';
 
 interface DailyDashboardProps {
   reservations: Reservation[];
@@ -181,7 +181,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
   const expectedFor = (r: Reservation) => {
     const room = casinoRates.rooms.find((x) => x.name.toLowerCase() === r.roomType.toLowerCase());
     if (!room) return null;
-    return calculateCasinoStayPrice(r.checkIn, r.checkOut, room.id, r.occupancy || 'singleDouble', casinoRates, undefined, r.holidayDates).total;
+    return calculateCasinoStayPrice(r.checkIn, r.checkOut, room.id, r.occupancy || 'singleDouble', casinoRates, undefined, r.holidayDates, r.compDates).total;
   };
 
   const audit = useMemo(() => {
@@ -426,7 +426,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
                       {r.remarks && <div className="text-[11.5px] text-muted truncate max-w-[220px]" title={r.remarks}>{r.remarks}</div>}
                     </td>
                     <td className="whitespace-nowrap">{r.roomType} <span className="text-faint">· {r.occupancy === 'triple' ? '3' : '1–2'}</span></td>
-                    <td className="text-muted whitespace-nowrap">{formatDateRange(r.checkIn, r.checkOut)} · {r.nights}{en ? 'n' : '박'}</td>
+                    <td className="text-muted whitespace-nowrap">{formatDateRange(r.checkIn, r.checkOut)} · {nightsLabel(r.nights, en)}</td>
                     <td className="r num text-muted">{php(expected as number)}</td>
                     <td className="r num font-medium text-ink">{php(r.amount)}</td>
                     <td className={`r num font-semibold ${diff > 0 ? 'text-bad' : 'text-info'}`}>{diff > 0 ? '+' : '−'}{php(Math.abs(diff))}</td>
@@ -461,28 +461,24 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
             </div>
             <div>
               <label className="field-label">{en ? 'Method' : '지급 수단'}</label>
-              <select value={payMethod} onChange={(e) => setPayMethod(e.target.value as PaymentMethod)} className="input">
+              <Select value={payMethod} onChange={(e) => setPayMethod(e.target.value as PaymentMethod)} className="input">
                 {PAYMENT_METHODS.filter((m) => m !== 'Junket Account').map((m) => (
                   <option key={m}>{m}</option>
                 ))}
-              </select>
+              </Select>
             </div>
             <div>
               <label className="field-label">{en ? 'OIC' : '담당자'}</label>
-              <input
-                list="pay-oic-options"
+              <ComboInput
                 value={payOic}
-                onChange={(e) => setPayOic(e.target.value.toUpperCase())}
+                onChange={(v) => setPayOic(v.toUpperCase())}
+                options={[
+                  ...settlements.flatMap((x) => x.payments.map((p) => p.oic || '')),
+                  ...(reservations.map((r) => r.oic).filter(Boolean) as string[]),
+                ]}
                 placeholder={en ? 'Who handled the payment' : '지급 담당자'}
-                className="input uppercase"
+                className="uppercase"
               />
-              <datalist id="pay-oic-options">
-                {Array.from(new Set(reservations.map((r) => r.oic).filter(Boolean) as string[]))
-                  .sort()
-                  .map((o) => (
-                    <option key={o} value={o} />
-                  ))}
-              </datalist>
             </div>
             <div>
               <label className="field-label">{en ? 'Reference no.' : '참조 번호'}</label>

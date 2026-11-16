@@ -24,6 +24,17 @@ const pool = mysql.createPool({
 });
 
 const VOUCHER_TABLES = [
+  `CREATE TABLE IF NOT EXISTS \`agents\` (
+  \`IDNo\`        INT          NOT NULL AUTO_INCREMENT,
+  \`AGENT_NAME\`  VARCHAR(100) NOT NULL,
+  \`ACTIVE\`      TINYINT(1)   NOT NULL DEFAULT 1 COMMENT '0 = hidden from suggestions',
+  \`CREATED_DT\`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  \`CREATED_BY\`  INT          NOT NULL,
+  \`EDITED_DT\`   DATETIME     NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (\`IDNo\`),
+  UNIQUE KEY \`uq_agents_name\` (\`AGENT_NAME\`),
+  CONSTRAINT \`fk_agents_user\` FOREIGN KEY (\`CREATED_BY\`) REFERENCES \`users\` (\`IDNo\`)
+) ENGINE=InnoDB`,
   `CREATE TABLE IF NOT EXISTS \`voucher_sales\` (
     \`IDNo\`        INT          NOT NULL AUTO_INCREMENT,
     \`APP_ID\`      VARCHAR(50)  NOT NULL COMMENT 'the app''s own id (key for saving)',
@@ -67,15 +78,69 @@ const VOUCHER_TABLES = [
   ) ENGINE=InnoDB`,
 ];
 
+// Room types added later. Each copies the current rates of its base room (same price as single/double),
+// and the list is re-numbered so they sit right under their base room. Only runs while one is missing.
+const EXTRA_ROOMS = [
+  ['guest_room_king', 'GUEST ROOM KING BED', 'guest_room'],
+  ['guest_room_twin', 'GUEST ROOM TWIN BED', 'guest_room'],
+  ['guest_room_king_pool_view', 'GUEST ROOM KING POOL VIEW', 'guest_room_pool_view'],
+  ['guest_room_twin_pool_view', 'GUEST ROOM TWIN POOL VIEW', 'guest_room_pool_view'],
+];
+async function ensureRoomTypes() {
+  // "COMPLIMENTARY ROOM" was replaced by per-night Free checkboxes — remove it unless a booking uses it.
+  await pool.query(
+    "DELETE FROM room_types WHERE ROOM_CODE = 'complimentary_room' AND IDNo NOT IN (SELECT ROOM_TYPE_ID FROM booking)"
+  );
+  const [have] = await pool.query('SELECT ROOM_CODE FROM room_types');
+  const codes = new Set(have.map((r) => r.ROOM_CODE));
+  const missing = EXTRA_ROOMS.filter(([code]) => !codes.has(code));
+  if (!missing.length) return;
+  for (const [code, name, base] of missing) {
+    if (!base) {
+      await pool.query(
+        `INSERT IGNORE INTO room_types
+           (ROOM_CODE, ROOM_NAME, WEEKDAY_RATE_SINGLE_DOUBLE, WEEKDAY_RATE_TRIPLE, WEEKEND_RATE_SINGLE_DOUBLE, WEEKEND_RATE_TRIPLE, SORT_ORDER)
+         VALUES (?, ?, 0, 0, 0, 0, 999)`,
+        [code, name]
+      );
+      continue;
+    }
+    await pool.query(
+      `INSERT IGNORE INTO room_types
+         (ROOM_CODE, ROOM_NAME, WEEKDAY_RATE_SINGLE_DOUBLE, WEEKDAY_RATE_TRIPLE, WEEKEND_RATE_SINGLE_DOUBLE, WEEKEND_RATE_TRIPLE, SORT_ORDER)
+       SELECT ?, ?, WEEKDAY_RATE_SINGLE_DOUBLE, WEEKDAY_RATE_TRIPLE, WEEKEND_RATE_SINGLE_DOUBLE, WEEKEND_RATE_TRIPLE, SORT_ORDER
+         FROM room_types WHERE ROOM_CODE = ?`,
+      [code, name, base]
+    );
+  }
+  // order: each base room, then its king / twin variants, then the rest as before
+  const [rows] = await pool.query('SELECT IDNo, ROOM_CODE FROM room_types ORDER BY SORT_ORDER, IDNo');
+  const after = new Map(EXTRA_ROOMS.filter(([, , base]) => base).map(([code, , base]) => [code, base]));
+  const ordered = [];
+  for (const r of rows) {
+    if (after.has(r.ROOM_CODE)) continue;
+    ordered.push(r);
+    for (const x of rows) if (after.get(x.ROOM_CODE) === r.ROOM_CODE) ordered.push(x);
+  }
+  for (const [i, r] of ordered.entries()) await pool.query('UPDATE room_types SET SORT_ORDER = ? WHERE IDNo = ?', [i + 1, r.IDNo]);
+  console.log(`Added room types: ${missing.map((m) => m[1]).join(', ')}`);
+}
+
 // Columns added after the first schema release. CREATE TABLE IF NOT EXISTS won't add them
 // to an existing table, so add them here when missing.
 async function ensureColumns() {
   // Tables added after the first schema release (same DDL as database/schema.sql).
   for (const ddl of VOUCHER_TABLES) await pool.query(ddl);
+  await ensureRoomTypes();
 
   const wanted = [
     ['booking', 'CURRENCY', "ENUM('PHP','KRW') NOT NULL DEFAULT 'PHP' AFTER `ROOM_AMOUNT`"],
     ['booking', 'IS_JUPITER_GUEST', 'TINYINT(1) NOT NULL DEFAULT 1 AFTER `REMARKS`'],
+    ['booking', 'AGENT_ID', "INT NULL COMMENT 'agents.IDNo' AFTER `GUEST_NAME`"],
+    ['voucher_sales', 'AGENT_ID', "INT NULL COMMENT 'agents.IDNo' AFTER `GUEST_NAME`"],
+    ['booking', 'COMP_DATES', "JSON NULL COMMENT 'complimentary (free) nights' AFTER `HOLIDAY_DATES`"],
+    ['booking_charges', 'IS_FREE', "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1 = complimentary, charged 0' AFTER `UNIT_PRICE`"],
+    ['voucher_sale_items', 'IS_FREE', "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1 = complimentary, charged 0' AFTER `UNIT_PRICE`"],
   ];
   for (const [table, col, def] of wanted) {
     const [rows] = await pool.query(
@@ -179,7 +244,8 @@ app.get(
     const [rooms] = await pool.query('SELECT * FROM room_types WHERE ACTIVE = 1 ORDER BY SORT_ORDER, IDNo');
     const [addons] = await pool.query('SELECT ADDON_CODE, PRICE FROM addon_rates');
     const [bookings] = await pool.query(
-      `SELECT b.*, rt.ROOM_NAME FROM booking b JOIN room_types rt ON rt.IDNo = b.ROOM_TYPE_ID
+      `SELECT b.*, rt.ROOM_NAME, a.AGENT_NAME FROM booking b JOIN room_types rt ON rt.IDNo = b.ROOM_TYPE_ID
+       LEFT JOIN agents a ON a.IDNo = b.AGENT_ID
        WHERE b.ACTIVE = 1 ORDER BY b.BOOKING_DATE DESC, b.IDNo DESC`
     );
     const [charges] = await pool.query(
@@ -189,7 +255,10 @@ app.get(
       'SELECT p.* FROM booking_payments p JOIN booking b ON b.IDNo = p.BOOKING_ID WHERE b.ACTIVE = 1 ORDER BY p.IDNo'
     );
     const [hotelPays] = await pool.query('SELECT * FROM hotel_payments ORDER BY SETTLE_MONTH, PAY_DATE, IDNo');
-    const [vSales] = await pool.query('SELECT * FROM voucher_sales WHERE ACTIVE = 1 ORDER BY SALE_DATE DESC, IDNo DESC');
+    const [vSales] = await pool.query(
+      `SELECT v.*, a.AGENT_NAME FROM voucher_sales v LEFT JOIN agents a ON a.IDNo = v.AGENT_ID
+       WHERE v.ACTIVE = 1 ORDER BY v.SALE_DATE DESC, v.IDNo DESC`
+    );
     const [vItems] = await pool.query(
       'SELECT i.* FROM voucher_sale_items i JOIN voucher_sales v ON v.IDNo = i.SALE_ID WHERE v.ACTIVE = 1 ORDER BY i.IDNo'
     );
@@ -226,6 +295,7 @@ app.get(
       id: b.APP_ID,
       confirmationNo: b.CONFIRM_NUM || '',
       guestName: b.GUEST_NAME,
+      agentName: b.AGENT_NAME || '',
       roomType: b.ROOM_NAME,
       checkIn: b.CHECK_IN,
       checkOut: b.CHECK_OUT,
@@ -237,6 +307,7 @@ app.get(
       occupancy: b.OCCUPANCY,
       isJupiterGuest: !!b.IS_JUPITER_GUEST,
       holidayDates: parseJson(b.HOLIDAY_DATES, []),
+      compDates: parseJson(b.COMP_DATES, []),
       charges: (chargeMap.get(b.IDNo) || []).map((c) => ({
         id: `c${c.IDNo}`,
         date: c.CHARGE_DATE,
@@ -244,6 +315,7 @@ app.get(
         qty: c.QTY,
         unitPrice: c.UNIT_PRICE,
         category: c.CATEGORY,
+        free: !!c.IS_FREE,
       })),
       payments: (payMap.get(b.IDNo) || []).map((p) => ({
         id: `p${p.IDNo}`,
@@ -283,6 +355,7 @@ app.get(
       id: v.APP_ID,
       date: v.SALE_DATE,
       guestName: v.GUEST_NAME,
+      agentName: v.AGENT_NAME || '',
       remarks: v.REMARKS || '',
       items: (itemMap.get(v.IDNo) || []).map((c) => ({
         id: `vi${c.IDNo}`,
@@ -291,6 +364,7 @@ app.get(
         qty: c.QTY,
         unitPrice: c.UNIT_PRICE,
         category: c.CATEGORY,
+        free: !!c.IS_FREE,
       })),
       payments: (vPayMap.get(v.IDNo) || []).map((p) => ({
         id: `vp${p.IDNo}`,
@@ -301,7 +375,73 @@ app.get(
       })),
     }));
 
-    res.json({ rates, reservations, settlements, voucherSales });
+    res.json({ rates, reservations, settlements, voucherSales, agents: await listAgents() });
+  })
+);
+
+// ---------------------------------------------------------------- agents (file maintenance)
+async function listAgents() {
+  const [rows] = await pool.query(
+    `SELECT a.IDNo, a.AGENT_NAME, a.ACTIVE, a.CREATED_DT,
+            (SELECT COUNT(*) FROM booking b WHERE b.AGENT_ID = a.IDNo AND b.ACTIVE = 1) AS BOOKINGS,
+            (SELECT COUNT(*) FROM voucher_sales v WHERE v.AGENT_ID = a.IDNo AND v.ACTIVE = 1) AS VOUCHERS,
+            GREATEST(
+              COALESCE((SELECT MAX(b.CHECK_IN) FROM booking b WHERE b.AGENT_ID = a.IDNo AND b.ACTIVE = 1), '1000-01-01'),
+              COALESCE((SELECT MAX(v.SALE_DATE) FROM voucher_sales v WHERE v.AGENT_ID = a.IDNo AND v.ACTIVE = 1), '1000-01-01')
+            ) AS LAST_DATE
+       FROM agents a ORDER BY a.AGENT_NAME`
+  );
+  return rows.map((a) => ({
+    id: a.IDNo,
+    name: a.AGENT_NAME,
+    active: !!a.ACTIVE,
+    bookings: Number(a.BOOKINGS),
+    vouchers: Number(a.VOUCHERS),
+    lastDate: a.LAST_DATE && !String(a.LAST_DATE).startsWith('1000') ? String(a.LAST_DATE).slice(0, 10) : '',
+    createdAt: String(a.CREATED_DT || '').slice(0, 10),
+  }));
+}
+
+// Finds the agent by name (case-insensitive) or creates it; re-activates a hidden one. '' → null.
+async function agentId(conn, name) {
+  const n = String(name || '').trim().replace(/\s+/g, ' ').slice(0, 100);
+  if (!n) return null;
+  const [ins] = await conn.query(
+    'INSERT INTO agents (AGENT_NAME, CREATED_BY) VALUES (?, ?) ON DUPLICATE KEY UPDATE ACTIVE = 1, IDNo = LAST_INSERT_ID(IDNo)',
+    [n, SYSTEM_USER]
+  );
+  return ins.insertId;
+}
+
+app.get(
+  '/api/agents',
+  route(async (_req, res) => res.json(await listAgents()))
+);
+
+app.post(
+  '/api/agents',
+  route(async (req, res) => {
+    const id = await agentId(pool, req.body && req.body.name);
+    if (!id) return res.status(400).json({ error: 'name is required' });
+    res.json(await listAgents());
+  })
+);
+
+// Rename and/or show-hide an agent. Renaming to a name that already exists is refused (409).
+app.put(
+  '/api/agents/:id',
+  route(async (req, res) => {
+    const id = Number(req.params.id);
+    const { name, active } = req.body || {};
+    if (name != null) {
+      const n = String(name).trim().replace(/\s+/g, ' ').slice(0, 100);
+      if (!n) return res.status(400).json({ error: 'name is required' });
+      const [dup] = await pool.query('SELECT IDNo FROM agents WHERE AGENT_NAME = ? AND IDNo <> ?', [n, id]);
+      if (dup.length) return res.status(409).json({ error: `Agent "${n}" already exists` });
+      await pool.query('UPDATE agents SET AGENT_NAME = ? WHERE IDNo = ?', [n, id]);
+    }
+    if (active != null) await pool.query('UPDATE agents SET ACTIVE = ? WHERE IDNo = ?', [active ? 1 : 0, id]);
+    res.json(await listAgents());
   })
 );
 
@@ -340,12 +480,15 @@ app.put(
         }
       }
       const roomId = await roomTypeId(conn, r.roomType || '');
+      const agent = await agentId(conn, r.agentName); // new names are added to the agents list
       const vals = [
         confirmNo,
         String(r.guestName).slice(0, 150),
+        agent,
         roomId,
         r.occupancy === 'triple' ? 'triple' : 'singleDouble',
         JSON.stringify(Array.isArray(r.holidayDates) ? r.holidayDates : []),
+        JSON.stringify(Array.isArray(r.compDates) ? r.compDates : []),
         r.checkIn,
         r.checkOut,
         Number(r.amount) || 0,
@@ -360,7 +503,7 @@ app.put(
       if (found.length) {
         bookingId = found[0].IDNo;
         await conn.query(
-          `UPDATE booking SET CONFIRM_NUM = ?, GUEST_NAME = ?, ROOM_TYPE_ID = ?, OCCUPANCY = ?, HOLIDAY_DATES = ?, CHECK_IN = ?,
+          `UPDATE booking SET CONFIRM_NUM = ?, GUEST_NAME = ?, AGENT_ID = ?, ROOM_TYPE_ID = ?, OCCUPANCY = ?, HOLIDAY_DATES = ?, COMP_DATES = ?, CHECK_IN = ?,
              CHECK_OUT = ?, ROOM_AMOUNT = ?, CURRENCY = ?, REMARKS = ?, IS_JUPITER_GUEST = ?, ACTIVE = 1, EDITED_BY = ?
            WHERE IDNo = ?`,
           [...vals, SYSTEM_USER, bookingId]
@@ -368,8 +511,8 @@ app.put(
       } else {
         const [ins] = await conn.query(
           `INSERT INTO booking
-             (CONFIRM_NUM, GUEST_NAME, ROOM_TYPE_ID, OCCUPANCY, HOLIDAY_DATES, CHECK_IN, CHECK_OUT, ROOM_AMOUNT, CURRENCY, REMARKS, IS_JUPITER_GUEST, APP_ID, BOOKED_BY)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (CONFIRM_NUM, GUEST_NAME, AGENT_ID, ROOM_TYPE_ID, OCCUPANCY, HOLIDAY_DATES, COMP_DATES, CHECK_IN, CHECK_OUT, ROOM_AMOUNT, CURRENCY, REMARKS, IS_JUPITER_GUEST, APP_ID, BOOKED_BY)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [...vals, id, SYSTEM_USER]
         );
         bookingId = ins.insertId;
@@ -381,7 +524,7 @@ app.put(
       const charges = (r.charges || []).filter((c) => Number(c.qty) > 0);
       if (charges.length) {
         await conn.query(
-          'INSERT INTO booking_charges (BOOKING_ID, CHARGE_DATE, CATEGORY, DESCRIPTION, QTY, UNIT_PRICE, CREATED_BY) VALUES ?',
+          'INSERT INTO booking_charges (BOOKING_ID, CHARGE_DATE, CATEGORY, DESCRIPTION, QTY, UNIT_PRICE, IS_FREE, CREATED_BY) VALUES ?',
           [
             charges.map((c) => [
               bookingId,
@@ -390,6 +533,7 @@ app.put(
               String(c.description || '').slice(0, 200),
               Math.round(Number(c.qty)),
               Math.max(0, Number(c.unitPrice) || 0),
+              c.free ? 1 : 0,
               SYSTEM_USER,
             ]),
           ]
@@ -508,15 +652,16 @@ app.put(
     if (!items.length) return res.status(400).json({ error: 'Add at least one voucher' });
 
     await inTransaction(async (conn) => {
-      const vals = [v.date, String(v.guestName).slice(0, 150), v.remarks ? String(v.remarks).slice(0, 500) : null];
+      const agent = await agentId(conn, v.agentName); // new names are added to the agents list
+      const vals = [v.date, String(v.guestName).slice(0, 150), agent, v.remarks ? String(v.remarks).slice(0, 500) : null];
       const [found] = await conn.query('SELECT IDNo FROM voucher_sales WHERE APP_ID = ?', [id]);
       let saleId;
       if (found.length) {
         saleId = found[0].IDNo;
-        await conn.query('UPDATE voucher_sales SET SALE_DATE = ?, GUEST_NAME = ?, REMARKS = ?, ACTIVE = 1 WHERE IDNo = ?', [...vals, saleId]);
+        await conn.query('UPDATE voucher_sales SET SALE_DATE = ?, GUEST_NAME = ?, AGENT_ID = ?, REMARKS = ?, ACTIVE = 1 WHERE IDNo = ?', [...vals, saleId]);
       } else {
         const [ins] = await conn.query(
-          'INSERT INTO voucher_sales (SALE_DATE, GUEST_NAME, REMARKS, APP_ID, CREATED_BY) VALUES (?, ?, ?, ?, ?)',
+          'INSERT INTO voucher_sales (SALE_DATE, GUEST_NAME, AGENT_ID, REMARKS, APP_ID, CREATED_BY) VALUES (?, ?, ?, ?, ?, ?)',
           [...vals, id, SYSTEM_USER]
         );
         saleId = ins.insertId;
@@ -524,13 +669,14 @@ app.put(
       // Items and payments are replaced as a whole (the app always sends the full lists).
       await conn.query('DELETE FROM voucher_sale_items WHERE SALE_ID = ?', [saleId]);
       await conn.query('DELETE FROM voucher_sale_payments WHERE SALE_ID = ?', [saleId]);
-      await conn.query('INSERT INTO voucher_sale_items (SALE_ID, CATEGORY, DESCRIPTION, QTY, UNIT_PRICE) VALUES ?', [
+      await conn.query('INSERT INTO voucher_sale_items (SALE_ID, CATEGORY, DESCRIPTION, QTY, UNIT_PRICE, IS_FREE) VALUES ?', [
         items.map((c) => [
           saleId,
           ['breakfast', 'dinner'].includes(c.category) ? c.category : 'other',
           String(c.description || '').slice(0, 200),
           Math.round(Number(c.qty)),
           Math.max(0, Number(c.unitPrice) || 0),
+          c.free ? 1 : 0,
         ]),
       ]);
       const payments = (v.payments || []).filter((p) => Number(p.amount) > 0);
@@ -567,8 +713,10 @@ app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 app.use(express.static(dist, { index: false, maxAge: '1h' }));
 app.get(/.*/, (_req, res) => res.sendFile(path.join(dist, 'index.html')));
 
+const dbLabel = `${process.env.DB_NAME || 'Jupiter_hotel'} @ ${process.env.DB_HOST || 'localhost'}:${process.env.DB_PORT || 3306}`;
 ensureColumns()
-  .catch((err) => console.error('Could not check/add booking columns:', err.message))
+  .then(() => console.log(`✓ Database connected — ${dbLabel}`))
+  .catch((err) => console.error(`✗ Database NOT connected — ${dbLabel}: ${err.code || ''} ${err.message}`))
   .finally(() => {
     app.listen(port, '0.0.0.0', () => {
       console.log(`Jupiter Hotel backend on :${port} (serving ${dist})`);

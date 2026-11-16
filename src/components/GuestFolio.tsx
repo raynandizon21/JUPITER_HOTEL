@@ -3,7 +3,8 @@ import { Plus, Trash2, Printer, Receipt, CreditCard, BedDouble, BedSingle, Utens
 import { CasinoRatesConfig, FolioCharge, FolioPayment, PaymentMethod, Reservation } from '../types/hotel';
 import { folioOf, syncStatus, uid, todayISO, PAYMENT_METHODS, peso, printDocument, escapeHtml as esc } from '../utils/billing';
 import { formatLongDate, getNightlyRates, formatDateRange } from '../utils/hotelHelpers';
-import { Dialog, toast } from './ui';
+import { ConfirmDialog, Dialog, toast, Select } from './ui';
+import { NightBadge, NightRateText, ChargeAmountText, FreeCheck } from './StayBreakdown';
 
 interface Props {
   reservation: Reservation;
@@ -78,6 +79,7 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
 
   // --- edit a charge row ---
   const [editId, setEditId] = useState<string | null>(null);
+  const [removingPay, setRemovingPay] = useState<FolioPayment | null>(null);
   const [eDesc, setEDesc] = useState('');
   const [eDate, setEDate] = useState('');
   const [eQty, setEQty] = useState(1);
@@ -130,13 +132,13 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
   };
 
   const room = casinoRates.rooms.find((x) => x.name.toLowerCase() === r.roomType.toLowerCase());
-  const nightly = room ? getNightlyRates(r.checkIn, r.checkOut, room.id, r.occupancy || 'singleDouble', casinoRates, r.holidayDates) : [];
+  const nightly = room ? getNightlyRates(r.checkIn, r.checkOut, room.id, r.occupancy || 'singleDouble', casinoRates, r.holidayDates, r.compDates) : [];
 
   const printFolio = () => {
     const rows = [
       `<tr><td>${formatLongDate(r.checkIn)}</td><td>${esc(r.roomType)} — ${r.nights} night(s)</td><td class="r">1</td><td class="r">${peso(r.amount)}</td><td class="r">${peso(r.amount)}</td></tr>`,
       ...charges.map(
-        (c) => `<tr><td>${formatLongDate(c.date)}</td><td>${esc(c.description)}</td><td class="r">${c.qty}</td><td class="r">${peso(c.unitPrice)}</td><td class="r">${peso(c.qty * c.unitPrice)}</td></tr>`
+        (c) => `<tr><td>${formatLongDate(c.date)}</td><td>${esc(c.description)}${c.free ? ' (free)' : ''}</td><td class="r">${c.qty}</td><td class="r">${peso(c.unitPrice)}</td><td class="r">${peso(c.free ? 0 : c.qty * c.unitPrice)}</td></tr>`
       ),
     ].join('');
     const pays = payments
@@ -231,12 +233,9 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
                                 {new Date(n.date + 'T00:00:00Z').toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })}
                               </span>
                             </span>
-                            <span className={`badge w-[72px] justify-center ${n.kind === 'weekday' ? 'badge-info' : n.kind === 'weekend' ? 'badge-warn' : 'badge-bad'}`}>
-                              {n.kind === 'weekday' ? (en ? 'Weekday' : '평일') : n.kind === 'weekend' ? (en ? 'Weekend' : '주말') : en ? 'Holiday' : '공휴일'}
-                            </span>
+                            <NightBadge n={n} en={en} />
                             <span className="num w-[150px] text-right whitespace-nowrap">
-                              {n.kind === 'holiday' && n.baseRate !== n.rate && <s className="text-faint text-[11px] mr-2">{peso(n.baseRate)}</s>}
-                              <span className={n.kind === 'holiday' ? 'text-bad font-medium' : 'text-ink'}>{peso(n.rate)}</span>
+                              <NightRateText n={n} />
                             </span>
                           </div>
                         ))}
@@ -269,11 +268,11 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
                           {editing ? (
                             <div className="flex-1 min-w-0 space-y-1.5">
                               <div className="grid grid-cols-[minmax(170px,1fr)_140px] gap-2">
-                                <select value={eKey} onChange={(e) => pickEditPreset(e.target.value)} className="input input-sm">
+                                <Select value={eKey} onChange={(e) => pickEditPreset(e.target.value)} className="input input-sm">
                                   {presets.map((p) => (
                                     <option key={p.key} value={p.key}>{p.label}</option>
                                   ))}
-                                </select>
+                                </Select>
                                 <input type="date" value={eDate} onChange={(e) => setEDate(e.target.value)} className="input input-sm" />
                               </div>
                               {eKey === 'other' && (
@@ -312,12 +311,25 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
                             />
                           </div>
                         ) : (
-                          <>
+                          <span className="inline-flex items-center gap-3">
+                            <FreeCheck
+                              en={en}
+                              checked={!!c.free}
+                              onChange={() => {
+                                update({ charges: charges.map((x) => (x.id === c.id ? { ...x, free: !x.free } : x)) });
+                                toast(
+                                  c.free ? (en ? 'Charge billed again' : '다시 청구됨') : en ? 'Marked as free' : '무료로 변경됨',
+                                  `${c.description} · ${c.free ? peso(c.qty * c.unitPrice) : '₱0'}`
+                                );
+                              }}
+                            />
                             {c.qty} × {peso(c.unitPrice)}
-                          </>
+                          </span>
                         )}
                       </td>
-                      <td className="r num font-semibold text-ink">{peso((editing ? eQty * ePrice : c.qty * c.unitPrice))}</td>
+                      <td className="r num font-semibold text-ink whitespace-nowrap">
+                        {editing ? peso(eQty * ePrice) : <ChargeAmountText qty={c.qty} unitPrice={c.unitPrice} free={c.free} />}
+                      </td>
                       <td className="r whitespace-nowrap">
                         {editing ? (
                           <>
@@ -364,11 +376,11 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
           <div className="mt-2 grid grid-cols-12 gap-2 items-end">
             <div className="col-span-6 sm:col-span-3">
               <label className="field-label">{en ? 'Item' : '항목'}</label>
-              <select value={preset} onChange={(e) => pickPreset(e.target.value)} className="input input-sm">
+              <Select value={preset} onChange={(e) => pickPreset(e.target.value)} className="input input-sm">
                 {presets.map((p) => (
                   <option key={p.key} value={p.key}>{p.label}</option>
                 ))}
-              </select>
+              </Select>
             </div>
             <div className="col-span-6 sm:col-span-3">
               <label className="field-label">{en ? 'Description' : '내역'}</label>
@@ -436,11 +448,7 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
                     <td className="r num font-medium text-ok">{peso(p.amount)}</td>
                     <td className="r">
                       <button
-                        onClick={() => {
-                          if (!confirm(en ? 'Remove this payment?' : '이 결제를 삭제하시겠습니까?')) return;
-                          update({ payments: payments.filter((x) => x.id !== p.id) });
-                          toast(en ? 'Payment removed' : '결제 삭제됨', `${peso(p.amount)} · ${p.method}`, 'bad');
-                        }}
+                        onClick={() => setRemovingPay(p)}
                         className="icon-btn hover:!text-bad"
                         title={en ? 'Remove' : '삭제'}
                       >
@@ -461,11 +469,11 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
               </div>
               <div className="col-span-6 sm:col-span-3">
                 <label className="field-label">{en ? 'Method' : '결제 수단'}</label>
-                <select value={pMethod} onChange={(e) => setPMethod(e.target.value as PaymentMethod)} className="input input-sm">
+                <Select value={pMethod} onChange={(e) => setPMethod(e.target.value as PaymentMethod)} className="input input-sm">
                   {PAYMENT_METHODS.map((m) => (
                     <option key={m}>{m}</option>
                   ))}
-                </select>
+                </Select>
               </div>
               <div className="col-span-6 sm:col-span-3">
                 <label className="field-label">{en ? 'Reference / OR no.' : '참조 번호'}</label>
@@ -499,6 +507,25 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
           {en ? 'Done' : '완료'}
         </button>
       </div>
+      {removingPay && (
+        <ConfirmDialog
+          danger
+          title={en ? 'Remove this payment?' : '이 결제를 삭제하시겠습니까?'}
+          message={
+            <>
+              <b className="text-ink">{peso(removingPay.amount)}</b> · {removingPay.method} · {formatLongDate(removingPay.date)}
+            </>
+          }
+          confirmLabel={en ? 'Remove' : '삭제'}
+          cancelLabel={en ? 'Cancel' : '취소'}
+          onCancel={() => setRemovingPay(null)}
+          onConfirm={() => {
+            update({ payments: payments.filter((x) => x.id !== removingPay.id) });
+            toast(en ? 'Payment removed' : '결제 삭제됨', `${peso(removingPay.amount)} · ${removingPay.method}`, 'bad');
+            setRemovingPay(null);
+          }}
+        />
+      )}
     </Dialog>
   );
 };
@@ -514,4 +541,4 @@ const Box: React.FC<{ label: string; value: string; tone?: 'ok' | 'bad' }> = ({ 
 
 /** Same item on the bill: description (case-insensitive), date and unit price. */
 const sameItem = (a: FolioCharge, b: FolioCharge) =>
-  a.description.trim().toLowerCase() === b.description.trim().toLowerCase() && a.date === b.date && a.unitPrice === b.unitPrice;
+  a.description.trim().toLowerCase() === b.description.trim().toLowerCase() && a.date === b.date && a.unitPrice === b.unitPrice && !!a.free === !!b.free;

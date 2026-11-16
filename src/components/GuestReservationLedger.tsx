@@ -536,6 +536,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                 <th>{t.thRoomType}</th>
                 <th>{en ? 'Stay' : '투숙 기간'}</th>
                 <th className="c">{t.thNightsAuto}</th>
+                <th className="r">{en ? 'Total amount (PHP)' : '총 금액 (페소)'}</th>
                 <th className="r">{t.thAmountPHP}</th>
                 <th className="r">{en ? 'Balance (PHP)' : '잔액 (페소)'}</th>
                 <th>{t.thRemarks}</th>
@@ -546,7 +547,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
             <tbody>
               {filteredReservations.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="!py-16 text-center">
+                  <td colSpan={11} className="!py-16 text-center">
                     <div className="text-[13px] text-muted">{t.noReservationsFound}</div>
                     <button onClick={openAddModal} className="btn btn-outline btn-sm mt-3">
                       <Plus className="w-3.5 h-3.5" />
@@ -571,6 +572,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                     <td className="text-ink-2 whitespace-nowrap">{res.roomType}</td>
                     <td className="text-ink-2 whitespace-nowrap">{formatDateRange(res.checkIn, res.checkOut)}</td>
                     <td className="c num">{res.nights}</td>
+                    <td className="r num font-semibold text-ink whitespace-nowrap">{peso(folioOf(res).total)}</td>
                     {/* paid = sum of guest payments (green); balance = bill − paid (red) */}
                     <td className={`r num font-semibold whitespace-nowrap ${folioOf(res).paid > 0 ? 'text-ok' : 'text-faint'}`}>{peso(folioOf(res).paid)}</td>
                     <td className={`r num font-semibold whitespace-nowrap ${folioOf(res).balance > 0 ? 'text-bad' : 'text-faint'}`}>{peso(Math.max(folioOf(res).balance, 0))}</td>
@@ -597,6 +599,25 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                 ))
               )}
             </tbody>
+            {filteredReservations.length > 0 &&
+              (() => {
+                // totals of everything the filters show (all pages, not only this page)
+                const fs = filteredReservations.map(folioOf);
+                return (
+                  <tfoot>
+                    <tr>
+                      <td colSpan={4}>
+                        {en ? 'Total' : '합계'} <span className="text-muted font-normal">· {filteredReservations.length} {en ? (filteredReservations.length === 1 ? 'booking' : 'bookings') : '건'}</span>
+                      </td>
+                      <td className="c num">{filteredReservations.reduce((a, r) => a + r.nights, 0)}</td>
+                      <td className="r num text-ink">{peso(fs.reduce((a, f) => a + f.total, 0))}</td>
+                      <td className="r num text-ok">{peso(fs.reduce((a, f) => a + f.paid, 0))}</td>
+                      <td className="r num text-bad">{peso(fs.reduce((a, f) => a + Math.max(f.balance, 0), 0))}</td>
+                      <td colSpan={3} />
+                    </tr>
+                  </tfoot>
+                );
+              })()}
           </table>
         </div>
         {filteredReservations.length > 0 && (
@@ -612,6 +633,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                 <th>{t.thGuestName}</th>
                 <th>{en ? 'Date' : '날짜'}</th>
                 <th>{en ? 'Vouchers' : '바우처'}</th>
+                <th className="r">{en ? 'Total amount (PHP)' : '총 금액 (페소)'}</th>
                 <th className="r">{t.thAmountPHP}</th>
                 <th className="r">{en ? 'Balance (PHP)' : '잔액 (페소)'}</th>
                 <th className="c">{t.thPaymentStatus}</th>
@@ -621,7 +643,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
             <tbody>
               {monthVouchers.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="!py-16 text-center">
+                  <td colSpan={8} className="!py-16 text-center">
                     <div className="text-[13px] text-muted">{en ? 'No voucher purchases this month.' : '이번 달 바우처 구매 내역이 없습니다.'}</div>
                     <button onClick={openAddVoucher} className="btn btn-outline btn-sm mt-3">
                       <Plus className="w-3.5 h-3.5" />
@@ -647,6 +669,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                     <td className="text-ink-2 max-w-[320px] truncate" title={v.remarks}>
                       {v.items.map((c) => `${c.description} × ${c.qty}`).join(', ')}
                     </td>
+                    <td className="r num font-semibold text-ink whitespace-nowrap">{peso(f.total)}</td>
                     <td className={`r num font-semibold whitespace-nowrap ${f.paid > 0 ? 'text-ok' : 'text-faint'}`}>{peso(f.paid)}</td>
                     <td className={`r num font-semibold whitespace-nowrap ${f.balance > 0 ? 'text-bad' : 'text-faint'}`}>{peso(Math.max(f.balance, 0))}</td>
                     <td className="c">
@@ -668,6 +691,23 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                 );
               })}
             </tbody>
+            {monthVouchers.length > 0 &&
+              (() => {
+                const fs = monthVouchers.map(voucherTotals);
+                return (
+                  <tfoot>
+                    <tr>
+                      <td colSpan={3}>
+                        {en ? 'Total' : '합계'} <span className="text-muted font-normal">· {monthVouchers.length} {en ? (monthVouchers.length === 1 ? 'purchase' : 'purchases') : '건'}</span>
+                      </td>
+                      <td className="r num text-ink">{peso(fs.reduce((a, f) => a + f.total, 0))}</td>
+                      <td className="r num text-ok">{peso(fs.reduce((a, f) => a + f.paid, 0))}</td>
+                      <td className="r num text-bad">{peso(fs.reduce((a, f) => a + Math.max(f.balance, 0), 0))}</td>
+                      <td colSpan={2} />
+                    </tr>
+                  </tfoot>
+                );
+              })()}
           </table>
         </div>
         {monthVouchers.length > 0 && (

@@ -74,7 +74,18 @@ export default function App() {
     let cancelled = false;
     (async () => {
       try {
-        const state = await api.loadState();
+        // retry a few times — the backend may still be starting (e.g. right after `npm run dev:all` or a restart)
+        let state: Awaited<ReturnType<typeof api.loadState>> | null = null;
+        for (let attempt = 0; ; attempt++) {
+          try {
+            state = await api.loadState();
+            break;
+          } catch (err) {
+            if (cancelled || attempt >= 4) throw err;
+            await new Promise((r) => setTimeout(r, 1500));
+          }
+        }
+        if (!state) return;
         for (const key of OLD_BROWSER_KEYS) {
           try {
             localStorage.removeItem(key);

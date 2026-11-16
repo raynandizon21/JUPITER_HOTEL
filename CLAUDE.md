@@ -31,9 +31,10 @@ To check for dead code, run `npx tsc --noEmit --noUnusedLocals --noUnusedParamet
   - `PUT/DELETE /api/reservations/:id` (id = `booking.APP_ID`; delete sets `ACTIVE = 0`), `PUT /api/settlements/:month`, `PUT /api/rates`.
   - `booking.CONFIRM_NUM` = the **hotel's confirmation number** (`Reservation.confirmationNo`), typed in by staff. Optional, but **1 number = 1 booking**: the form blocks duplicates and the server returns 409 (deleted bookings keep their number too).
   - The pages still use plain React state. Effects in `src/App.tsx` diff each change against what the server has and send only what changed.
-  - Only the language (`hotel_language_v2`) stays in localStorage. Old browser data (`hotel_reservations_v2`, `hotel_settlements_v1`, `hotel_casino_rates_v2`) is moved into MySQL once by `importLocalData`, then removed.
+  - Only the language (`hotel_language_v2`) stays in localStorage. Old browser data (`hotel_reservations_v2`, `hotel_settlements_v1`, `hotel_casino_rates_v2`, demo flag) is **not imported** — the app just deletes those keys on load (importing them once brought old sample / demo bookings back into MySQL).
   - **Voucher-only purchases** (`VoucherSale`, tables `voucher_sales` / `voucher_sale_items` / `voucher_sale_payments`, `PUT/DELETE /api/vouchers/:id`): vouchers bought **without** a room booking. New Booking → *Vouchers only* (`VoucherSaleForm`). They are **for the record**: listed under the Guest Ledger and in the Daily Settlement *Vouchers sold* column (by purchase date), but **not** in check-ins / nights / occupancy or the hotel settlement totals.
   - **Agents** (file maintenance, table `agents`, `booking.AGENT_ID`, page `AgentsMaintenance`): the booking form's *Agent* field suggests active agents; a new name is added to `agents` by the server when the booking is saved (`agentId()` find-or-create, case-insensitive). `GET/POST /api/agents`, `PUT /api/agents/:id` (rename / show-hide).
+  - **Holidays** (table `holidays`, seeded with PH holidays 2026–2027 on backend start, `PUT /api/holidays/:date`): managed from the ⚙ **Holidays** button on the Guest Ledger (no sidebar item). New Reservation ticks *Holiday rate* automatically for nights on an active holiday; the calendar marks them.
   - There is no login yet: `BOOKED_BY` / `CREATED_BY` use the seeded `system` user (IDNo 1).
 - The app starts **empty**: there is no sample or demo data. The **Clear data** sidebar button is hidden (pass `onClearData` to `Sidebar` to show it again).
 - **MySQL schema** is in `database/schema.sql` (7 tables). `scripts/init-db.mjs` applies it on `npm run dev` using the `DB_*` values in `.env`.
@@ -52,12 +53,13 @@ To check for dead code, run `npx tsc --noEmit --noUnusedLocals --noUnusedParamet
   - total = `amount` (room) + Σ charges;
   - paid = Σ payments;
   - status is **derived**: `paid` / `partial` / `unpaid`. Never store it. `syncStatus` only keeps the legacy `paymentStatus` field in step.
-- **Settlement month** = the check-in month (`referenceMonth`). Money is counted on the **check-in date**.
-- **Daily Settlement** columns:
-  - *Check-in list* = arrivals that day;
-  - *Check-ins (No. of Reservations)* and *Total nights stayed* = rooms occupied that night (`checkIn ≤ date < checkOut`, 1 room = 1 night);
-  - Paid/Unpaid counts and amounts are per check-in date.
+- **Settlement month** (monthly settlement with the hotel) = the check-in month (`referenceMonth`).
+- **Daily Settlement** is a **day-by-day audit** (`bookingDays` / `buildDailyRows` in `DailySettlement.tsx`):
+  - *Check-in list* = arrivals that day, plus "+N staying" for guests who arrived earlier and are still in the room;
+  - *Total amount* = each booking's value **on that day**: that night's rate (holiday / free nights included), scaled so the nights add up to the booked room amount; extras on their charge date;
+  - *Paid / Unpaid amount* = the guest's payments cover the earliest days first, so each day's paid + unpaid = that day's total;
   - *Vouchers sold* = voucher-only purchases that day (record only, not added to the other columns).
+  - The Paid/Unpaid **booking counts** and the *Check-ins (No. of Reservations)* / *Total nights stayed* columns were removed on request.
 - Extra charges with the same description + date + unit price are **merged** (qty added), not duplicated.
 - The reservation OIC (hotel) has been **removed** from the UI and exports. Only *payments to the hotel* have an OIC field.
 

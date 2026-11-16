@@ -24,6 +24,40 @@ const pool = mysql.createPool({
 });
 
 const VOUCHER_TABLES = [
+  `CREATE TABLE IF NOT EXISTS \`holidays\` (
+  \`IDNo\`          INT          NOT NULL AUTO_INCREMENT,
+  \`HOLIDAY_DATE\`  DATE         NOT NULL,
+  \`HOLIDAY_NAME\`  VARCHAR(150) NOT NULL,
+  \`HOLIDAY_TYPE\`  ENUM('regular','special') NOT NULL DEFAULT 'regular' COMMENT 'regular holiday / special non-working day',
+  \`ACTIVE\`        TINYINT(1)   NOT NULL DEFAULT 1 COMMENT '0 = removed',
+  \`CREATED_DT\`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (\`IDNo\`),
+  UNIQUE KEY \`uq_holiday_date\` (\`HOLIDAY_DATE\`)
+) ENGINE=InnoDB`,
+  `CREATE TABLE IF NOT EXISTS \`fund_transactions\` (
+  \`IDNo\`         INT           NOT NULL AUTO_INCREMENT,
+  \`APP_ID\`       VARCHAR(50)   NOT NULL COMMENT 'the app''s own id (key for saving)',
+  \`FUND\`         ENUM('room','voucher') NOT NULL COMMENT 'room = room payments fund, voucher = voucher payments fund',
+  \`TXN_TYPE\`     ENUM('out','opening') NOT NULL COMMENT 'out = cash out, opening = opening balance',
+  \`TXN_DATE\`     DATE          NOT NULL,
+  \`AMOUNT\`       DECIMAL(12,2) NOT NULL,
+  \`METHOD\`       ENUM('Cash','Bank Transfer','GCash','Credit Card','Junket Account') NOT NULL DEFAULT 'Cash',
+  \`PURPOSE\`      VARCHAR(30)   NOT NULL DEFAULT 'withdrawal' COMMENT 'withdrawal / expense / remit / other / opening',
+  \`RELEASED_BY\`  VARCHAR(100)  NULL,
+  \`RECEIVED_BY\`  VARCHAR(100)  NULL,
+  \`REFERENCE\`    VARCHAR(100)  NULL,
+  \`REMARKS\`      VARCHAR(500)  NULL,
+  \`VOIDED\`       TINYINT(1)    NOT NULL DEFAULT 0 COMMENT '1 = voided (kept for the record, not counted)',
+  \`VOID_REASON\`  VARCHAR(300)  NULL,
+  \`VOIDED_DT\`    DATETIME      NULL,
+  \`CREATED_DT\`   DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  \`CREATED_BY\`   INT           NOT NULL,
+  PRIMARY KEY (\`IDNo\`),
+  UNIQUE KEY \`uq_fund_app_id\` (\`APP_ID\`),
+  KEY \`idx_fund_date\` (\`TXN_DATE\`),
+  CONSTRAINT \`chk_fund_amount\` CHECK (\`AMOUNT\` > 0),
+  CONSTRAINT \`fk_fund_user\` FOREIGN KEY (\`CREATED_BY\`) REFERENCES \`users\` (\`IDNo\`)
+) ENGINE=InnoDB`,
   `CREATE TABLE IF NOT EXISTS \`agents\` (
   \`IDNo\`        INT          NOT NULL AUTO_INCREMENT,
   \`AGENT_NAME\`  VARCHAR(100) NOT NULL,
@@ -132,6 +166,44 @@ async function ensureColumns() {
   // Tables added after the first schema release (same DDL as database/schema.sql).
   for (const ddl of VOUCHER_TABLES) await pool.query(ddl);
   await ensureRoomTypes();
+  // Philippine holidays 2026–2027 — INSERT IGNORE keeps any date staff already added or changed
+  await pool.query(`INSERT IGNORE INTO holidays (HOLIDAY_DATE, HOLIDAY_NAME, HOLIDAY_TYPE) VALUES
+  ('2026-01-01', 'New Year''s Day', 'regular'),
+  ('2026-02-17', 'Chinese New Year', 'special'),
+  ('2026-04-02', 'Maundy Thursday', 'regular'),
+  ('2026-04-03', 'Good Friday', 'regular'),
+  ('2026-04-04', 'Black Saturday', 'special'),
+  ('2026-04-09', 'Araw ng Kagitingan', 'regular'),
+  ('2026-05-01', 'Labor Day', 'regular'),
+  ('2026-06-12', 'Independence Day', 'regular'),
+  ('2026-08-21', 'Ninoy Aquino Day', 'special'),
+  ('2026-08-31', 'National Heroes Day', 'regular'),
+  ('2026-11-01', 'All Saints'' Day', 'special'),
+  ('2026-11-02', 'All Souls'' Day', 'special'),
+  ('2026-11-30', 'Bonifacio Day', 'regular'),
+  ('2026-12-08', 'Feast of the Immaculate Conception', 'special'),
+  ('2026-12-24', 'Christmas Eve', 'special'),
+  ('2026-12-25', 'Christmas Day', 'regular'),
+  ('2026-12-30', 'Rizal Day', 'regular'),
+  ('2026-12-31', 'Last Day of the Year', 'special'),
+  ('2027-01-01', 'New Year''s Day', 'regular'),
+  ('2027-02-06', 'Chinese New Year', 'special'),
+  ('2027-03-25', 'Maundy Thursday', 'regular'),
+  ('2027-03-26', 'Good Friday', 'regular'),
+  ('2027-03-27', 'Black Saturday', 'special'),
+  ('2027-04-09', 'Araw ng Kagitingan', 'regular'),
+  ('2027-05-01', 'Labor Day', 'regular'),
+  ('2027-06-12', 'Independence Day', 'regular'),
+  ('2027-08-21', 'Ninoy Aquino Day', 'special'),
+  ('2027-08-30', 'National Heroes Day', 'regular'),
+  ('2027-11-01', 'All Saints'' Day', 'special'),
+  ('2027-11-02', 'All Souls'' Day', 'special'),
+  ('2027-11-30', 'Bonifacio Day', 'regular'),
+  ('2027-12-08', 'Feast of the Immaculate Conception', 'special'),
+  ('2027-12-24', 'Christmas Eve', 'special'),
+  ('2027-12-25', 'Christmas Day', 'regular'),
+  ('2027-12-30', 'Rizal Day', 'regular'),
+  ('2027-12-31', 'Last Day of the Year', 'special')`);
 
   const wanted = [
     ['booking', 'CURRENCY', "ENUM('PHP','KRW') NOT NULL DEFAULT 'PHP' AFTER `ROOM_AMOUNT`"],
@@ -375,7 +447,27 @@ app.get(
       })),
     }));
 
-    res.json({ rates, reservations, settlements, voucherSales, agents: await listAgents() });
+    const [fundRows] = await pool.query('SELECT * FROM fund_transactions ORDER BY TXN_DATE, IDNo');
+    const fundTransactions = fundRows.map((f) => ({
+      id: f.APP_ID,
+      fund: f.FUND,
+      type: f.TXN_TYPE,
+      date: f.TXN_DATE,
+      amount: f.AMOUNT,
+      method: f.METHOD,
+      purpose: f.PURPOSE,
+      releasedBy: f.RELEASED_BY || '',
+      receivedBy: f.RECEIVED_BY || '',
+      reference: f.REFERENCE || '',
+      remarks: f.REMARKS || '',
+      voided: !!f.VOIDED,
+      voidReason: f.VOID_REASON || '',
+    }));
+
+    const [hol] = await pool.query('SELECT HOLIDAY_DATE, HOLIDAY_NAME, HOLIDAY_TYPE, ACTIVE FROM holidays ORDER BY HOLIDAY_DATE');
+    const holidays = hol.map((h) => ({ date: h.HOLIDAY_DATE, name: h.HOLIDAY_NAME, type: h.HOLIDAY_TYPE, active: !!h.ACTIVE }));
+
+    res.json({ rates, reservations, settlements, voucherSales, agents: await listAgents(), fundTransactions, holidays });
   })
 );
 
@@ -631,6 +723,9 @@ app.put(
           ]
         );
       }
+      // room types removed in the app are hidden (ACTIVE = 0), not deleted — old bookings still point to them
+      const codes = rooms.map((r) => String(r.id).slice(0, 50));
+      if (codes.length) await conn.query('UPDATE room_types SET ACTIVE = 0 WHERE ROOM_CODE NOT IN (?)', [codes]);
       for (const code of ['breakfast', 'dinner', 'extraBed']) {
         if (vouchers[code] == null) continue;
         await conn.query('UPDATE addon_rates SET PRICE = ? WHERE ADDON_CODE = ?', [Number(vouchers[code]) || 0, code]);
@@ -702,6 +797,69 @@ app.delete(
   '/api/vouchers/:id',
   route(async (req, res) => {
     await pool.query('UPDATE voucher_sales SET ACTIVE = 0 WHERE APP_ID = ?', [req.params.id]);
+    res.json({ ok: true });
+  })
+);
+
+// ---------------------------------------------------------------- fund (cash outs / opening balances)
+// Create or update one fund transaction. There is no delete: a mistake is voided (VOIDED = 1) with a reason.
+app.put(
+  '/api/fund/:id',
+  route(async (req, res) => {
+    const f = req.body || {};
+    const id = String(req.params.id).slice(0, 50);
+    const amount = Number(f.amount);
+    if (!f.date || !(amount > 0)) return res.status(400).json({ error: 'date and a positive amount are required' });
+    const methods = ['Cash', 'Bank Transfer', 'GCash', 'Credit Card', 'Junket Account'];
+    const vals = [
+      f.fund === 'voucher' ? 'voucher' : 'room',
+      f.type === 'opening' ? 'opening' : 'out',
+      f.date,
+      amount,
+      methods.includes(f.method) ? f.method : 'Cash',
+      String(f.purpose || 'withdrawal').slice(0, 30),
+      f.releasedBy ? String(f.releasedBy).slice(0, 100) : null,
+      f.receivedBy ? String(f.receivedBy).slice(0, 100) : null,
+      f.reference ? String(f.reference).slice(0, 100) : null,
+      f.remarks ? String(f.remarks).slice(0, 500) : null,
+      f.voided ? 1 : 0,
+      f.voided && f.voidReason ? String(f.voidReason).slice(0, 300) : null,
+    ];
+    const [found] = await pool.query('SELECT IDNo, VOIDED FROM fund_transactions WHERE APP_ID = ?', [id]);
+    if (found.length) {
+      await pool.query(
+        `UPDATE fund_transactions SET FUND = ?, TXN_TYPE = ?, TXN_DATE = ?, AMOUNT = ?, METHOD = ?, PURPOSE = ?, RELEASED_BY = ?,
+           RECEIVED_BY = ?, REFERENCE = ?, REMARKS = ?, VOIDED = ?, VOID_REASON = ?,
+           VOIDED_DT = IF(? = 1 AND VOIDED = 0, NOW(), VOIDED_DT) WHERE IDNo = ?`,
+        [...vals, f.voided ? 1 : 0, found[0].IDNo]
+      );
+    } else {
+      await pool.query(
+        `INSERT INTO fund_transactions
+           (FUND, TXN_TYPE, TXN_DATE, AMOUNT, METHOD, PURPOSE, RELEASED_BY, RECEIVED_BY, REFERENCE, REMARKS, VOIDED, VOID_REASON, APP_ID, CREATED_BY)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [...vals, id, SYSTEM_USER]
+      );
+    }
+    res.json({ ok: true });
+  })
+);
+
+// ---------------------------------------------------------------- holidays
+// Add / update one holiday by date; active = false removes it (kept, so the seed doesn't add it back).
+app.put(
+  '/api/holidays/:date',
+  route(async (req, res) => {
+    const date = String(req.params.date);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    const h = req.body || {};
+    const name = String(h.name || '').trim().slice(0, 150);
+    if (!name) return res.status(400).json({ error: 'name is required' });
+    await pool.query(
+      `INSERT INTO holidays (HOLIDAY_DATE, HOLIDAY_NAME, HOLIDAY_TYPE, ACTIVE) VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE HOLIDAY_NAME = VALUES(HOLIDAY_NAME), HOLIDAY_TYPE = VALUES(HOLIDAY_TYPE), ACTIVE = VALUES(ACTIVE)`,
+      [date, name, h.type === 'special' ? 'special' : 'regular', h.active === false ? 0 : 1]
+    );
     res.json({ ok: true });
   })
 );

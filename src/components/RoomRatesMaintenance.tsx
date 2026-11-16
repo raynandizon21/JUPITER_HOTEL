@@ -1,12 +1,15 @@
 import React, { useState } from 'react';
-import { CasinoRatesConfig } from '../types/hotel';
-import { Check, Settings2, X, Utensils, Coffee, BedDouble } from 'lucide-react';
+import { CasinoRatesConfig, Reservation } from '../types/hotel';
+import { Check, Settings2, X, Utensils, Coffee, BedDouble, Plus, Trash2 } from 'lucide-react';
 import { Language } from '../i18n/translations';
 import { PageHeader, toast } from './ui';
 
 interface RoomRatesMaintenanceProps {
   casinoRates: CasinoRatesConfig;
-  setCasinoRates: React.Dispatch<React.SetStateAction<CasinoRatesConfig>>;
+  /** Saves the new rates (App also renames the room type on existing bookings when a room is renamed). */
+  onSave: (next: CasinoRatesConfig) => void;
+  /** Used to stop deleting a room type that bookings still use. */
+  reservations: Reservation[];
   language: Language;
 }
 
@@ -14,7 +17,7 @@ type RateField = 'singleDoubleWeekday' | 'tripleWeekday' | 'singleDoubleWeekend'
 type VoucherField = 'breakfast' | 'dinner' | 'extraBed';
 const toNum = (v: string) => parseInt(v.replace(/[^0-9]/g, ''), 10) || 0;
 
-export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casinoRates, setCasinoRates, language }) => {
+export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casinoRates, onSave, reservations, language }) => {
   const en = language === 'en';
   // While editing, changes go to a draft; Save commits, Cancel discards.
   const [draft, setDraft] = useState<CasinoRatesConfig | null>(null);
@@ -27,15 +30,63 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
   const setVoucher = (field: VoucherField, value: string) =>
     setDraft((prev) => prev && { ...prev, vouchers: { ...prev.vouchers, [field]: toNum(value) } });
 
+  const setRoomName = (index: number, value: string) =>
+    setDraft((prev) => prev && { ...prev, rooms: prev.rooms.map((r, i) => (i === index ? { ...r, name: value.toUpperCase() } : r)) });
+
+  const addRoom = () =>
+    setDraft(
+      (prev) =>
+        prev && {
+          ...prev,
+          rooms: [
+            ...prev.rooms,
+            { id: `room_${Date.now().toString(36)}`, name: '', singleDoubleWeekday: 0, tripleWeekday: 0, singleDoubleWeekend: 0, tripleWeekend: 0 },
+          ],
+        }
+    );
+
+  // bookings that use a room type (by its saved name) — such a room can't be deleted
+  const usedBy = (id: string) => {
+    const saved = casinoRates.rooms.find((r) => r.id === id);
+    return saved ? reservations.filter((r) => r.roomType.toLowerCase() === saved.name.toLowerCase()).length : 0;
+  };
+  const removeRoom = (index: number) => {
+    const room = draft?.rooms[index];
+    if (!room) return;
+    const n = usedBy(room.id);
+    if (n) {
+      toast(en ? 'Room type is in use' : '사용 중인 객실 타입', en ? `${room.name} has ${n} booking(s) — it can't be deleted` : `${room.name} — 예약 ${n}건이 사용 중이라 삭제할 수 없습니다`, 'bad');
+      return;
+    }
+    setDraft((prev) => prev && { ...prev, rooms: prev.rooms.filter((_, i) => i !== index) });
+  };
+
   const startEdit = () => setDraft(structuredClone(casinoRates));
   const cancelEdit = () => {
     setDraft(null);
     toast(en ? 'Changes discarded' : '변경 취소됨', en ? 'Room rates were not changed' : '요금표가 변경되지 않았습니다', 'info');
   };
   const saveEdit = () => {
-    if (draft) setCasinoRates(draft);
+    if (!draft) return;
+    const rooms = draft.rooms.map((r) => ({ ...r, name: r.name.trim().replace(/\s+/g, ' ') }));
+    if (rooms.some((r) => !r.name)) {
+      toast(en ? 'Room name is missing' : '객실 이름이 비어 있습니다', en ? 'Type a name for every room type' : '모든 객실 타입에 이름을 입력하세요', 'bad');
+      return;
+    }
+    const dup = rooms.find((r, i) => rooms.findIndex((x) => x.name.toLowerCase() === r.name.toLowerCase()) !== i);
+    if (dup) {
+      toast(en ? 'Duplicate room name' : '중복된 객실 이름', dup.name, 'bad');
+      return;
+    }
+    const added = rooms.filter((r) => !casinoRates.rooms.some((x) => x.id === r.id)).length;
+    const removed = casinoRates.rooms.filter((x) => !rooms.some((r) => r.id === x.id)).length;
+    onSave({ ...draft, rooms });
     setDraft(null);
-    toast(en ? 'Room rates saved' : '요금표 저장됨', en ? 'New rates apply to new bookings and quotes' : '새 요금이 예약과 견적에 적용됩니다');
+    toast(
+      en ? 'Room rates saved' : '요금표 저장됨',
+      [added && (en ? `${added} added` : `${added}개 추가`), removed && (en ? `${removed} deleted` : `${removed}개 삭제`)].filter(Boolean).join(' · ') ||
+        (en ? 'New rates apply to new bookings and quotes' : '새 요금이 예약과 견적에 적용됩니다')
+    );
   };
 
   const filteredRooms = data.rooms;
@@ -76,7 +127,7 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
   ];
 
   return (
-    <div className="flex flex-col min-h-[calc(100vh-176px)]">
+    <div className="flex flex-col min-h-[calc(100vh-200px)]">
       <PageHeader
         title={en ? 'Room rates' : '객실 요금표'}
         actions={
@@ -135,7 +186,29 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
                 const idx = data.rooms.findIndex((r) => r.id === room.id);
                 return (
                   <tr key={room.id} className="hover:bg-sunken/60 transition-colors">
-                    <td className={`${cell} px-4 py-1 font-medium text-ink`}>{room.name}</td>
+                    <td className={`${cell} px-4 py-1 font-medium text-ink`}>
+                      {editing ? (
+                        <div className="flex items-center gap-2">
+                          <input
+                            value={room.name}
+                            onChange={(e) => setRoomName(idx, e.target.value)}
+                            placeholder={en ? 'ROOM TYPE NAME' : '객실 타입 이름'}
+                            autoFocus={!room.name}
+                            maxLength={100}
+                            className="input input-sm uppercase flex-1 min-w-0"
+                          />
+                          <button
+                            onClick={() => removeRoom(idx)}
+                            className="icon-btn hover:!text-bad shrink-0"
+                            title={usedBy(room.id) ? (en ? `Used by ${usedBy(room.id)} booking(s)` : `예약 ${usedBy(room.id)}건 사용 중`) : en ? 'Delete room type' : '객실 타입 삭제'}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ) : (
+                        room.name
+                      )}
+                    </td>
                     {groups.flatMap((g) =>
                       g.cols.map((f) => (
                         <td key={f} className={`${cell} px-4 py-1 text-center`}>
@@ -146,6 +219,16 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
                   </tr>
                 );
               })}
+              {editing && (
+                <tr>
+                  <td colSpan={5} className="px-4 py-2 border-b border-line">
+                    <button onClick={addRoom} className="btn btn-outline btn-sm">
+                      <Plus className="w-3.5 h-3.5" />
+                      {en ? 'Add room type' : '객실 타입 추가'}
+                    </button>
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

@@ -233,6 +233,49 @@ CREATE TABLE IF NOT EXISTS `voucher_sale_payments` (
 ) ENGINE=InnoDB;
 
 
+-- 9) Fund (Pondo) — cash outs and opening balances of the room / voucher funds.
+--    Money in comes from booking_payments / voucher_sale_payments; payments to the
+--    hotel (hotel_payments) also come out of the room fund.
+CREATE TABLE IF NOT EXISTS `fund_transactions` (
+  `IDNo`         INT           NOT NULL AUTO_INCREMENT,
+  `APP_ID`       VARCHAR(50)   NOT NULL COMMENT 'the app''s own id (key for saving)',
+  `FUND`         ENUM('room','voucher') NOT NULL COMMENT 'room = room payments fund, voucher = voucher payments fund',
+  `TXN_TYPE`     ENUM('out','opening') NOT NULL COMMENT 'out = cash out, opening = opening balance',
+  `TXN_DATE`     DATE          NOT NULL,
+  `AMOUNT`       DECIMAL(12,2) NOT NULL,
+  `METHOD`       ENUM('Cash','Bank Transfer','GCash','Credit Card','Junket Account') NOT NULL DEFAULT 'Cash',
+  `PURPOSE`      VARCHAR(30)   NOT NULL DEFAULT 'withdrawal' COMMENT 'withdrawal / expense / remit / other / opening',
+  `RELEASED_BY`  VARCHAR(100)  NULL,
+  `RECEIVED_BY`  VARCHAR(100)  NULL,
+  `REFERENCE`    VARCHAR(100)  NULL,
+  `REMARKS`      VARCHAR(500)  NULL,
+  `VOIDED`       TINYINT(1)    NOT NULL DEFAULT 0 COMMENT '1 = voided (kept for the record, not counted)',
+  `VOID_REASON`  VARCHAR(300)  NULL,
+  `VOIDED_DT`    DATETIME      NULL,
+  `CREATED_DT`   DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `CREATED_BY`   INT           NOT NULL,
+  PRIMARY KEY (`IDNo`),
+  UNIQUE KEY `uq_fund_app_id` (`APP_ID`),
+  KEY `idx_fund_date` (`TXN_DATE`),
+  CONSTRAINT `chk_fund_amount` CHECK (`AMOUNT` > 0),
+  CONSTRAINT `fk_fund_user` FOREIGN KEY (`CREATED_BY`) REFERENCES `users` (`IDNo`)
+) ENGINE=InnoDB;
+
+
+-- 10) Philippine holidays (Holidays page). Nights on these dates are ticked "Holiday rate"
+--     automatically in New Reservation, and the dates are marked on the calendar.
+CREATE TABLE IF NOT EXISTS `holidays` (
+  `IDNo`          INT          NOT NULL AUTO_INCREMENT,
+  `HOLIDAY_DATE`  DATE         NOT NULL,
+  `HOLIDAY_NAME`  VARCHAR(150) NOT NULL,
+  `HOLIDAY_TYPE`  ENUM('regular','special') NOT NULL DEFAULT 'regular' COMMENT 'regular holiday / special non-working day',
+  `ACTIVE`        TINYINT(1)   NOT NULL DEFAULT 1 COMMENT '0 = removed',
+  `CREATED_DT`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`IDNo`),
+  UNIQUE KEY `uq_holiday_date` (`HOLIDAY_DATE`)
+) ENGINE=InnoDB;
+
+
 -- =====================================================================
 --  Seed data (only inserted if missing)
 -- =====================================================================
@@ -263,3 +306,42 @@ VALUES
   ('breakfast', 'Breakfast voucher', 725),
   ('dinner',    'Dinner voucher',    1680),
   ('extraBed',  'Extra bed (per night)', 1650);
+
+-- Philippine holidays 2026–2027 (only added if the date is not in the table yet)
+INSERT IGNORE INTO `holidays` (`HOLIDAY_DATE`, `HOLIDAY_NAME`, `HOLIDAY_TYPE`) VALUES
+  ('2026-01-01', 'New Year''s Day', 'regular'),
+  ('2026-02-17', 'Chinese New Year', 'special'),
+  ('2026-04-02', 'Maundy Thursday', 'regular'),
+  ('2026-04-03', 'Good Friday', 'regular'),
+  ('2026-04-04', 'Black Saturday', 'special'),
+  ('2026-04-09', 'Araw ng Kagitingan', 'regular'),
+  ('2026-05-01', 'Labor Day', 'regular'),
+  ('2026-06-12', 'Independence Day', 'regular'),
+  ('2026-08-21', 'Ninoy Aquino Day', 'special'),
+  ('2026-08-31', 'National Heroes Day', 'regular'),
+  ('2026-11-01', 'All Saints'' Day', 'special'),
+  ('2026-11-02', 'All Souls'' Day', 'special'),
+  ('2026-11-30', 'Bonifacio Day', 'regular'),
+  ('2026-12-08', 'Feast of the Immaculate Conception', 'special'),
+  ('2026-12-24', 'Christmas Eve', 'special'),
+  ('2026-12-25', 'Christmas Day', 'regular'),
+  ('2026-12-30', 'Rizal Day', 'regular'),
+  ('2026-12-31', 'Last Day of the Year', 'special'),
+  ('2027-01-01', 'New Year''s Day', 'regular'),
+  ('2027-02-06', 'Chinese New Year', 'special'),
+  ('2027-03-25', 'Maundy Thursday', 'regular'),
+  ('2027-03-26', 'Good Friday', 'regular'),
+  ('2027-03-27', 'Black Saturday', 'special'),
+  ('2027-04-09', 'Araw ng Kagitingan', 'regular'),
+  ('2027-05-01', 'Labor Day', 'regular'),
+  ('2027-06-12', 'Independence Day', 'regular'),
+  ('2027-08-21', 'Ninoy Aquino Day', 'special'),
+  ('2027-08-30', 'National Heroes Day', 'regular'),
+  ('2027-11-01', 'All Saints'' Day', 'special'),
+  ('2027-11-02', 'All Souls'' Day', 'special'),
+  ('2027-11-30', 'Bonifacio Day', 'regular'),
+  ('2027-12-08', 'Feast of the Immaculate Conception', 'special'),
+  ('2027-12-24', 'Christmas Eve', 'special'),
+  ('2027-12-25', 'Christmas Day', 'regular'),
+  ('2027-12-30', 'Rizal Day', 'regular'),
+  ('2027-12-31', 'Last Day of the Year', 'special');

@@ -1,17 +1,24 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Agent, Reservation, CasinoRatesConfig, PaymentStatus, VoucherSale, FolioCharge } from '../types/hotel';
-import { getReferenceMonth, exportToCSV, getNightlyRates, addDays, formatLongDate, formatMonth, formatDateRange, nightsLabel } from '../utils/hotelHelpers';
-import { Plus, Search, Download, Pencil, Trash2, Sparkles, Receipt, Ticket, BedDouble } from 'lucide-react';
+import { Agent, Holiday, Reservation, CasinoRatesConfig, PaymentStatus, VoucherSale, FolioCharge } from '../types/hotel';
+import { getReferenceMonth, exportToCSV, getNightlyRates, addDays, formatLongDate, formatMonth, formatDateRange, nightsLabel, getStayNights, getDaysInMonth } from '../utils/hotelHelpers';
+import { Plus, Search, Download, Pencil, Trash2, Sparkles, Receipt, Ticket, BedDouble, Settings2 } from 'lucide-react';
 import { GuestFolio, FolioStatusBadge } from './GuestFolio';
 import { folioOf, syncStatus, uid, peso, todayISO, voucherTotals, chargeAmount } from '../utils/billing';
 import { Language, translations } from '../i18n/translations';
-import { PageHeader, Dialog, ConfirmDialog, ComboInput, MonthSelect, MONTHS, Pager, toast, Select } from './ui';
+import { PageHeader, Dialog, ConfirmDialog, ComboInput, Pager, toast, Select } from './ui';
 import { VoucherSaleForm, VoucherItemsEditor } from './VoucherSaleForm';
+import { HolidaysMaintenance } from './HolidaysMaintenance';
+import { DateFilter } from './DateFilter';
 import { StayBreakdown, NightRateText, ChargeAmountText } from './StayBreakdown';
 
 interface GuestReservationLedgerProps {
   /** Agents file maintenance list (suggestions for the Agent field). */
   agents?: Agent[];
+  /** Philippine holidays — nights on these dates get the holiday rate ticked automatically. */
+  holidays?: Holiday[];
+  /** Full holiday list + save — for the ⚙ Holidays settings pop-up. */
+  allHolidays?: Holiday[];
+  onSaveHoliday?: (h: Holiday) => void;
   reservations: Reservation[];
   setReservations: React.Dispatch<React.SetStateAction<Reservation[]>>;
   /** Vouchers bought without a room booking (for the record). */
@@ -40,6 +47,9 @@ interface GuestReservationLedgerProps {
 
 export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
   agents = [],
+  holidays = [],
+  allHolidays,
+  onSaveHoliday,
   reservations,
   setReservations,
   voucherSales,
@@ -60,6 +70,24 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
   const t = translations[language];
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | '결제완료' | '미결제'>('all');
+  // extra filters: stay dates (overlapping the range) and agent
+  const monthRange = (ym: string) => (ym ? [`${ym}-01`, getDaysInMonth(ym).slice(-1)[0]] : ['', '']);
+  // default: one day (today); Date Range starts as the selected month
+  const [dateMode, setDateMode] = useState<'date' | 'range'>('date');
+  const [day, setDay] = useState(todayISO);
+  const [dateFrom, setDateFrom] = useState(() => monthRange(selectedMonth)[0]);
+  const [dateTo, setDateTo] = useState(() => monthRange(selectedMonth)[1]);
+  // when another page changes the month (e.g. after saving a booking), show that month
+  useEffect(() => {
+    const [a, b] = monthRange(selectedMonth);
+    setDateFrom(a);
+    setDateTo(b);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedMonth]);
+  // the dates actually filtered on
+  const [fFrom, fTo] = dateMode === 'date' ? [day, day] : [dateFrom, dateTo];
+  const [agentFilter, setAgentFilter] = useState('');
+  const [showHolidays, setShowHolidays] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingReservation, setEditingReservation] = useState<Reservation | null>(null);
   // New Booking can be a room booking or a voucher-only purchase (no room)
@@ -88,6 +116,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
 
   const [formHolidays, setFormHolidays] = useState<string[]>([]);
   const [formComps, setFormComps] = useState<string[]>([]); // complimentary (free) nights
+  const holidayName = useMemo(() => new Map(holidays.map((h) => [h.date, h.name])), [holidays]);
   // vouchers / add-ons bought together with a new room booking (saved as billing charges)
   const [formVouchers, setFormVouchers] = useState<FolioCharge[]>([]);
   // false = amount follows the room rates automatically; true = user typed their own amount
@@ -110,6 +139,12 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
     setAmountTouched(false);
     setFormAmount(rateTotal);
   };
+
+  useEffect(() => {
+    if (!isModalOpen || editingReservation || !formCheckIn || !formCheckOut || formCheckOut <= formCheckIn) return;
+    setFormHolidays(getStayNights(formCheckIn, formCheckOut).filter((d) => holidayName.has(d)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formCheckIn, formCheckOut, isModalOpen, holidayName]);
 
   const toggleComp = (date: string) => setFormComps((prev) => (prev.includes(date) ? prev.filter((d) => d !== date) : [...prev, date]));
   const toggleHoliday = (date: string) =>
@@ -287,6 +322,8 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
       setFlashId(highlightId);
       setSearchTerm('');
       setStatusFilter('all');
+      // a just-saved booking may not be on today — show its whole month so the row is visible
+      setDateMode('range');
     }
   }, [highlightId]);
   useEffect(() => {
@@ -315,9 +352,10 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
   // Filtered reservations list
   const filteredReservations = useMemo(() => {
     return reservations.filter((r) => {
-      if (selectedMonth && r.referenceMonth !== selectedMonth) {
-        return false;
-      }
+      // stay overlaps the picked dates (check-out day is not a night)
+      if (fFrom && r.checkOut <= fFrom) return false;
+      if (fTo && r.checkIn > fTo) return false;
+      if (agentFilter && (agentFilter === '—' ? !!r.agentName : (r.agentName || '').toLowerCase() !== agentFilter.toLowerCase())) return false;
       if (statusFilter !== 'all' && r.paymentStatus !== statusFilter) {
         return false;
       }
@@ -334,17 +372,19 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
       }
       return true;
     });
-  }, [reservations, selectedMonth, statusFilter, searchTerm]);
+  }, [reservations, statusFilter, searchTerm, fFrom, fTo, agentFilter]);
 
   // voucher-only purchases for the selected month (same search box)
   const monthVouchers = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
     return voucherSales.filter(
       (v) =>
-        v.date.startsWith(selectedMonth) &&
+        (!fFrom || v.date >= fFrom) &&
+        (!fTo || v.date <= fTo) &&
+        (!agentFilter || (agentFilter === '—' ? !v.agentName : (v.agentName || '').toLowerCase() === agentFilter.toLowerCase())) &&
         (!q || v.guestName.toLowerCase().includes(q) || v.remarks.toLowerCase().includes(q) || v.items.some((c) => c.description.toLowerCase().includes(q)))
     );
-  }, [voucherSales, selectedMonth, searchTerm]);
+  }, [voucherSales, searchTerm, fFrom, fTo, agentFilter]);
 
   // Pagination (no inner scrolling): rows per page is picked under the table.
   const [pageSize, setPageSize] = useState(10);
@@ -353,7 +393,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
   useEffect(() => {
     setRoomPage(0);
     setVoucherPage(0);
-  }, [selectedMonth, searchTerm, statusFilter]);
+  }, [fFrom, fTo, searchTerm, statusFilter, agentFilter]);
   const roomPages = Math.max(1, Math.ceil(filteredReservations.length / pageSize));
   const voucherPages = Math.max(1, Math.ceil(monthVouchers.length / pageSize));
   const safeRoomPage = Math.min(roomPage, roomPages - 1);
@@ -402,20 +442,67 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
               <span className={`num text-[11px] px-1.5 h-5 min-w-5 inline-grid place-items-center rounded-full ${tab === key ? chip : 'bg-canvas text-muted'}`}>{count}</span>
             </button>
           ))}
+          {onSaveHoliday && (
+            <button
+              onClick={() => setShowHolidays(true)}
+              className="ml-auto mb-1.5 btn btn-outline btn-sm"
+              title={en ? 'Settings — Philippine holidays' : '설정 — 필리핀 공휴일'}
+            >
+              <Settings2 className="w-3.5 h-3.5" />
+              {en ? 'Holidays' : '공휴일'}
+            </button>
+          )}
         </div>
         <div className="card-head flex-col md:flex-row md:items-center items-stretch">
-          <div className="flex flex-wrap items-center gap-2 flex-1">
+          <div className="flex flex-wrap items-end gap-2 flex-1">
             <div className="relative flex-1 min-w-[200px] max-w-xs">
               <Search className="w-3.5 h-3.5 text-faint absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
                 type="text"
-                placeholder={t.searchLedgerPlaceholder}
+                placeholder={en ? 'Guest name, confirmation no., room…' : '손님 이름, 확인 번호, 객실…'}
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="input input-sm pl-8 !rounded-full bg-sunken"
               />
             </div>
-            <MonthSelect value={selectedMonth} onChange={setSelectedMonth} months={MONTHS} allLabel={t.allMonths} />
+            <DateFilter
+              en={en}
+              mode={dateMode}
+              onMode={setDateMode}
+              date={day}
+              onDate={setDay}
+              from={dateFrom}
+              to={dateTo}
+              onRange={(a, b) => {
+                setDateFrom(a);
+                setDateTo(b);
+              }}
+            />
+            <Select value={agentFilter} onChange={(e) => setAgentFilter(e.target.value)} className="input input-sm w-auto min-w-[140px]">
+              <option value="">{en ? 'All agents' : '전체 에이전트'}</option>
+              <option value="—">{en ? 'No agent' : '에이전트 없음'}</option>
+              {agents.map((a) => (
+                <option key={a.id} value={a.name}>
+                  {a.name}
+                </option>
+              ))}
+            </Select>
+            {(agentFilter || searchTerm || dateMode === 'range' || day !== todayISO()) && (
+              <button
+                onClick={() => {
+                  const [a, b] = monthRange(selectedMonth);
+                  setDateMode('date');
+                  setDay(todayISO());
+                  setDateFrom(a);
+                  setDateTo(b);
+                  setAgentFilter('');
+                  setSearchTerm('');
+                }}
+                className="text-[12px] text-accent hover:underline cursor-pointer"
+              >
+                {en ? 'Clear filters' : '필터 초기화'}
+              </button>
+            )}
             {tab === 'rooms' && (
               <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)} className="input input-sm w-auto min-w-[150px]">
                 <option value="all">{t.filterAll} ({filteredReservations.length})</option>
@@ -654,6 +741,10 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
             setDeletingVoucher(null);
           }}
         />
+      )}
+
+      {showHolidays && onSaveHoliday && (
+        <HolidaysMaintenance holidays={allHolidays || holidays} onSave={onSaveHoliday} language={language} onClose={() => setShowHolidays(false)} />
       )}
 
       {isModalOpen && (
@@ -908,6 +999,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                               <span className="text-muted">
                                 {new Date(n.date + 'T00:00:00Z').toLocaleDateString(en ? 'en-US' : 'ko-KR', { weekday: 'short', timeZone: 'UTC' })}
                               </span>
+
                             </span>
                           </td>
                           <td>

@@ -1,6 +1,6 @@
 // Talks to the Node backend (server/index.js), which saves everything in MySQL.
 // Same origin in production (the backend serves dist/); in dev, Vite proxies /api.
-import { Agent, CasinoRatesConfig, FolioPayment, Reservation, Settlement, VoucherSale } from '../types/hotel';
+import { Agent, FundTxn, Holiday, CasinoRatesConfig, FolioPayment, Reservation, Settlement, VoucherSale } from '../types/hotel';
 
 const BASE = '/api';
 
@@ -28,6 +28,8 @@ export interface ServerState {
   settlements: Settlement[];
   voucherSales: VoucherSale[];
   agents: Agent[];
+  fundTransactions: FundTxn[];
+  holidays: Holiday[];
 }
 
 export const api = {
@@ -39,6 +41,8 @@ export const api = {
   saveVoucherSale: (v: VoucherSale) => call('PUT', `/vouchers/${encodeURIComponent(v.id)}`, v),
   deleteVoucherSale: (id: string) => call('DELETE', `/vouchers/${encodeURIComponent(id)}`),
   listAgents: () => call<Agent[]>('GET', '/agents'),
+  saveHoliday: (h: Holiday) => call('PUT', `/holidays/${h.date}`, h),
+  saveFundTxn: (f: FundTxn) => call('PUT', `/fund/${encodeURIComponent(f.id)}`, f),
   createAgent: (name: string) => call<Agent[]>('POST', '/agents', { name }),
   updateAgent: (id: number, patch: { name?: string; active?: boolean }) => call<Agent[]>('PUT', `/agents/${id}`, patch),
 };

@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutGrid, CalendarRange, BookOpenText, CalendarDays, SlidersHorizontal, Calculator, Menu, UserRound, Trash2 } from 'lucide-react';
+import { LayoutGrid, CalendarRange, BookOpenText, CalendarDays, SlidersHorizontal, Calculator, Menu, UserRound, PiggyBank, Trash2 } from 'lucide-react';
 import { ActiveModule } from '../types/hotel';
 import { Language, translations } from '../i18n/translations';
 
@@ -23,6 +23,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeModule, setActiveModule,
       items: [
         { id: 'dashboard', label: t.navDashboard, Icon: LayoutGrid },
         { id: 'daily', label: t.navDaily, Icon: CalendarRange },
+        { id: 'fund', label: en ? 'Fund' : '자금 (펀드)', Icon: PiggyBank },
       ],
     },
     {
@@ -41,7 +42,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeModule, setActiveModule,
     },
     {
       label: en ? 'File maintenance' : '기초 정보',
-      items: [{ id: 'agents', label: en ? 'Agents' : '에이전트', Icon: UserRound }],
+      items: [
+        { id: 'agents', label: en ? 'Agents' : '에이전트', Icon: UserRound },
+      ],
     },
   ];
 

@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { Reservation, CasinoRatesConfig } from '../types/hotel';
+import { Reservation, CasinoRatesConfig, Holiday } from '../types/hotel';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { GuestFolio } from './GuestFolio';
 import { Language, translations } from '../i18n/translations';
@@ -7,6 +7,8 @@ import { PageHeader } from './ui';
 
 interface ReservationCalendarProps {
   casinoRates: CasinoRatesConfig;
+  /** Philippine holidays to mark on the calendar. */
+  holidays?: Holiday[];
   reservations: Reservation[];
   setReservations: React.Dispatch<React.SetStateAction<Reservation[]>>;
   currentYearMonth: string;
@@ -32,7 +34,9 @@ export const ReservationCalendar: React.FC<ReservationCalendarProps> = ({
   onSelectMonth,
   language,
   casinoRates,
+  holidays = [],
 }) => {
+  const holidayOf = useMemo(() => new Map(holidays.map((h) => [h.date, h])), [holidays]);
   const t = translations[language];
   const [folioId, setFolioId] = useState<string | null>(null);
   const setSelectedRes = (r: Reservation | null) => setFolioId(r ? r.id : null);
@@ -179,7 +183,7 @@ export const ReservationCalendar: React.FC<ReservationCalendarProps> = ({
   } as const;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-176px)] min-h-[520px]">
+    <div className="flex flex-col h-[calc(100vh-200px)] min-h-[480px]">
       <PageHeader
         title={`${monthNames[month - 1]} ${year}`}
         actions={
@@ -221,23 +225,32 @@ export const ReservationCalendar: React.FC<ReservationCalendarProps> = ({
                 const items = dayStatusMap.get(cd.dateStr) || [];
                 const isToday = cd.dateStr === todayStr;
                 const sunday = cd.dayOfWeek === 0;
+                const hol = holidayOf.get(cd.dateStr);
                 return (
                   <div
                     key={cd.dateStr}
                     className={`relative min-h-0 overflow-hidden p-1.5 flex flex-col border-line ${(idx + 1) % 7 !== 0 ? 'border-r' : ''} ${
                       idx < calendarDays.length - 7 ? 'border-b' : ''
-                    } ${!cd.isCurrentMonth ? 'bg-sunken' : 'bg-surface'} ${
+                    } ${!cd.isCurrentMonth ? 'bg-sunken' : hol ? 'bg-bad-soft/50' : 'bg-surface'} ${
                       isToday ? 'ring-2 ring-inset ring-ink z-[1]' : ''
                     }`}
                   >
                     <div className="flex items-center gap-1 mb-1 px-0.5 shrink-0">
                       <span
                         className={`num text-[13px] font-semibold w-6 h-6 grid place-items-center rounded-full ${
-                          isToday ? 'bg-ink text-white' : !cd.isCurrentMonth ? (sunday ? 'text-bad/50' : 'text-faint/70') : sunday ? 'text-bad' : 'text-ink'
+                          isToday ? 'bg-ink text-white' : !cd.isCurrentMonth ? (sunday || hol ? 'text-bad/50' : 'text-faint/70') : sunday || hol ? 'text-bad' : 'text-ink'
                         }`}
                       >
                         {cd.day}
                       </span>
+                      {hol && (
+                        <span
+                          className={`min-w-0 truncate text-[10.5px] font-semibold ${hol.type === 'regular' ? 'text-bad' : 'text-warn'} ${cd.isCurrentMonth ? '' : 'opacity-50'}`}
+                          title={`${hol.name} · ${hol.type === 'regular' ? (language === 'en' ? 'Regular holiday' : '정규 공휴일') : language === 'en' ? 'Special non-working day' : '특별 휴일'}`}
+                        >
+                          {hol.name}
+                        </span>
+                      )}
                     </div>
 
                     <div className={`space-y-0.5 flex-1 min-h-0 overflow-y-auto ${cd.isCurrentMonth ? '' : 'opacity-40'}`}>

@@ -7,61 +7,23 @@ import { ReservationCalendar } from './components/ReservationCalendar';
 import { RoomRatesMaintenance } from './components/RoomRatesMaintenance';
 import { RateCalculator } from './components/RateCalculator';
 import { AgentsMaintenance } from './components/AgentsMaintenance';
+import { FundPage } from './components/FundPage';
+import { PH_HOLIDAYS } from './data/phHolidays';
 import { LanguageSelector } from './components/LanguageSelector';
 import jupiterLogo from './logo.jpg';
 import { Home as HomeIcon, Plus } from 'lucide-react';
 import { Toaster, toast } from './components/ui';
-import { ActiveModule, Agent, CasinoRatesConfig, FolioCharge, Reservation, Settlement, VoucherSale } from './types/hotel';
+import { ActiveModule, Agent, FundTxn, Holiday, CasinoRatesConfig, FolioCharge, Reservation, Settlement, VoucherSale } from './types/hotel';
 import { migrateReservation, syncStatus } from './utils/billing';
-import { api, ServerState } from './utils/api';
+import { api } from './utils/api';
 import { defaultCasinoRates } from './data/initialData';
 import { Language } from './i18n/translations';
 import { nightsLabel } from './utils/hotelHelpers';
 
-// Old browser-only data keys: read once and moved into MySQL (see importLocalData).
-const STORAGE_KEY_CASINO_RATES = 'hotel_casino_rates_v2';
-const STORAGE_KEY_RESERVATIONS = 'hotel_reservations_v2';
 const STORAGE_KEY_LANGUAGE = 'hotel_language_v2';
-const STORAGE_KEY_SETTLEMENTS = 'hotel_settlements_v1';
-
-const readLocal = <T,>(key: string): T | null => {
-  try {
-    const saved = localStorage.getItem(key);
-    return saved ? (JSON.parse(saved) as T) : null;
-  } catch {
-    return null;
-  }
-};
-
-/**
- * Before the database, data lived only in this browser's localStorage. Send anything the
- * server doesn't have yet, then remove the old keys. Returns a short summary, or '' if nothing moved.
- */
-async function importLocalData(server: ServerState): Promise<string> {
-  const localRes = (readLocal<Reservation[]>(STORAGE_KEY_RESERVATIONS) || []).map(migrateReservation);
-  const localSettle = readLocal<Settlement[]>(STORAGE_KEY_SETTLEMENTS) || [];
-  const localRates = readLocal<CasinoRatesConfig>(STORAGE_KEY_CASINO_RATES);
-  if (!localRes.length && !localSettle.length && !localRates) return '';
-
-  const have = new Set(server.reservations.map((r) => r.id));
-  const newRes = localRes.filter((r) => !have.has(r.id));
-  const haveMonths = new Set(server.settlements.map((s) => s.month));
-  const newSettle = localSettle.filter((s) => s.payments.length && !haveMonths.has(s.month));
-
-  for (const r of newRes) await api.saveReservation(r);
-  for (const s of newSettle) await api.saveSettlement(s.month, s.payments);
-  // Rates edited in this browser win only while the database has no bookings yet.
-  if (localRates && !server.reservations.length) await api.saveRates(localRates);
-
-  for (const key of [STORAGE_KEY_RESERVATIONS, STORAGE_KEY_SETTLEMENTS, STORAGE_KEY_CASINO_RATES]) {
-    try {
-      localStorage.removeItem(key);
-    } catch {
-      /* ignore */
-    }
-  }
-  return newRes.length || newSettle.length ? `${newRes.length} booking(s), ${newSettle.length} month(s) of hotel payments` : '';
-}
+// Data saved in the browser before the database existed. It is NOT imported (that brought old
+// sample / demo bookings back) — it is only removed so it can't be picked up again.
+const OLD_BROWSER_KEYS = ['hotel_reservations_v2', 'hotel_settlements_v1', 'hotel_casino_rates_v2', 'hotel_demo_mixed_payments_v1'];
 
 export default function App() {
   // 1. Language State (DEFAULT: English 'en' with PH / KOR flags)
@@ -90,6 +52,16 @@ export default function App() {
   const [voucherSales, setVoucherSales] = useState<VoucherSale[]>([]);
   // Agents file maintenance (suggestions in the booking form)
   const [agents, setAgents] = useState<Agent[]>([]);
+  // Fund (Pondo): manual cash outs + opening balances
+  const [fundTxns, setFundTxns] = useState<FundTxn[]>([]);
+  // Philippine holidays (auto holiday rate + calendar marks); built-in list until the server answers
+  const [holidays, setHolidays] = useState<Holiday[]>(() => PH_HOLIDAYS.map((h) => ({ ...h, active: true })));
+  const activeHolidays = holidays.filter((h) => h.active);
+  const saveHoliday = (h: Holiday) => {
+    setHolidays((prev) => [...prev.filter((x) => x.date !== h.date), h].sort((a, b) => a.date.localeCompare(b.date)));
+    api.saveHoliday(h).catch(syncFailed);
+  };
+  const syncedFund = useRef(new Map<string, string>());
   const [dbStatus, setDbStatus] = useState<'loading' | 'ready' | 'error'>('loading');
 
   // What the server already has (JSON per id / month), so only real changes are sent.
@@ -102,10 +74,14 @@ export default function App() {
     let cancelled = false;
     (async () => {
       try {
-        let state = await api.loadState();
-        // One-time move of bookings saved in this browser (before the database) into MySQL.
-        const imported = await importLocalData(state);
-        if (imported) state = await api.loadState();
+        const state = await api.loadState();
+        for (const key of OLD_BROWSER_KEYS) {
+          try {
+            localStorage.removeItem(key);
+          } catch {
+            /* ignore */
+          }
+        }
         if (cancelled) return;
         const res = state.reservations.map((r) => syncStatus(migrateReservation(r)));
         syncedRes.current = new Map(res.map((r) => [r.id, JSON.stringify(r)]));
@@ -118,9 +94,12 @@ export default function App() {
         setSettlements(state.settlements);
         setVoucherSales(vouchers);
         setAgents(state.agents || []);
+        const fund = state.fundTransactions || [];
+        syncedFund.current = new Map(fund.map((f) => [f.id, JSON.stringify(f)]));
+        setFundTxns(fund);
+        if (state.holidays?.length) setHolidays(state.holidays);
         setCasinoRates(rates);
         setDbStatus('ready');
-        if (imported) toast(language === 'en' ? 'Saved data moved to the database' : '저장된 데이터를 DB로 옮겼습니다', `${imported}`, 'info');
       } catch (e) {
         console.error(e);
         if (cancelled) return;
@@ -225,6 +204,20 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voucherSales, dbStatus]);
 
+  useEffect(() => {
+    if (dbStatus !== 'ready') return;
+    for (const f of fundTxns) {
+      const json = JSON.stringify(f);
+      if (syncedFund.current.get(f.id) === json) continue;
+      syncedFund.current.set(f.id, json);
+      api.saveFundTxn(f).catch((e) => {
+        syncedFund.current.delete(f.id); // retry on the next change
+        syncFailed(e);
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fundTxns, dbStatus]);
+
   // 3. Navigation State
   const [activeModule, setActiveModule] = useState<ActiveModule>('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -281,6 +274,7 @@ export default function App() {
           formOnly
           autoOpenNew
           agents={agents}
+          holidays={activeHolidays}
           reservations={reservations}
           setReservations={setReservations}
           voucherSales={voucherSales}
@@ -373,13 +367,10 @@ export default function App() {
               </button>
               <button
                 onClick={() => setBookingOpen(true)}
-                className="h-9 pl-1.5 pr-4 rounded-full inline-flex items-center gap-2 text-[13px] font-medium border bg-surface text-ink-2 border-line hover:border-line-strong hover:text-ink shadow-xs transition-all cursor-pointer"
+                className="h-9 pl-1.5 pr-4 rounded-full inline-flex items-center gap-2 text-[13px] font-medium border bg-accent text-white border-accent hover:brightness-110 shadow-sm transition-all cursor-pointer"
               >
-                <span
-                  className="w-6 h-6 rounded-full grid place-items-center text-[#1d1505]"
-                  style={{ background: 'linear-gradient(180deg, #f7df92 0%, #e6bb52 55%, #c9982e 100%)' }}
-                >
-                  <Plus className="w-3.5 h-3.5" strokeWidth={2.75} />
+                <span className="w-6 h-6 rounded-full grid place-items-center bg-white/20">
+                  <Plus className="w-3.5 h-3.5" strokeWidth={2.5} />
                 </span>
                 {language === 'en' ? 'New Booking' : '새 예약'}
               </button>
@@ -417,6 +408,9 @@ export default function App() {
                 initialTab={ledgerTab}
                 highlightId={highlightId}
                 agents={agents}
+                holidays={activeHolidays}
+                allHolidays={holidays}
+                onSaveHoliday={saveHoliday}
                 reservations={reservations}
                 setReservations={setReservations}
                 voucherSales={voucherSales}
@@ -430,6 +424,7 @@ export default function App() {
 
             {activeModule === 'calendar' && (
               <ReservationCalendar
+                holidays={activeHolidays}
                 reservations={reservations}
                 setReservations={setReservations}
                 casinoRates={casinoRates}
@@ -442,12 +437,38 @@ export default function App() {
             {activeModule === 'maintenance' && (
               <RoomRatesMaintenance
                 casinoRates={casinoRates}
-                setCasinoRates={setCasinoRates}
+                reservations={reservations}
+                onSave={(next) => {
+                  // a renamed room type: move its bookings to the new name (bookings keep the room by name)
+                  const renamed = new Map<string, string>();
+                  for (const r of next.rooms) {
+                    const old = casinoRates.rooms.find((x) => x.id === r.id);
+                    if (old && old.name !== r.name) renamed.set(old.name.toLowerCase(), r.name);
+                  }
+                  if (renamed.size)
+                    setReservations((prev) => prev.map((r) => (renamed.has(r.roomType.toLowerCase()) ? { ...r, roomType: renamed.get(r.roomType.toLowerCase())! } : r)));
+                  setCasinoRates(next);
+                }}
                 language={language}
               />
             )}
 
             {activeModule === 'agents' && <AgentsMaintenance agents={agents} setAgents={setAgents} language={language} />}
+
+
+
+            {activeModule === 'fund' && (
+              <FundPage
+                reservations={reservations}
+                voucherSales={voucherSales}
+                settlements={settlements}
+                fundTxns={fundTxns}
+                setFundTxns={setFundTxns}
+                selectedMonth={selectedMonth}
+                setSelectedMonth={setSelectedMonth}
+                language={language}
+              />
+            )}
 
             {activeModule === 'calculator' && (
               <RateCalculator

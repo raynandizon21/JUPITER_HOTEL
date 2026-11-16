@@ -88,7 +88,32 @@ export interface Settlement {
   payments: FolioPayment[];
 }
 
-export type ActiveModule = 'dashboard' | 'daily' | 'ledger' | 'calendar' | 'maintenance' | 'calculator' | 'agents';
+export type ActiveModule = 'dashboard' | 'daily' | 'ledger' | 'calendar' | 'maintenance' | 'calculator' | 'agents' | 'fund';
+
+/** Philippine holiday (table `holidays`). */
+export interface Holiday {
+  date: string; // YYYY-MM-DD
+  name: string;
+  type: 'regular' | 'special'; // regular holiday / special non-working day
+  active: boolean;
+}
+
+/** Fund (Pondo): a manual cash out or opening balance of the room / voucher fund. Never deleted — voided instead. */
+export interface FundTxn {
+  id: string;
+  fund: 'room' | 'voucher';
+  type: 'out' | 'opening';
+  date: string; // YYYY-MM-DD
+  amount: number;
+  method: PaymentMethod;
+  purpose: 'withdrawal' | 'expense' | 'remit' | 'other' | 'opening';
+  releasedBy: string;
+  receivedBy: string;
+  reference: string;
+  remarks: string;
+  voided: boolean;
+  voidReason: string;
+}
 
 /** Agents file maintenance (table `agents`). */
 export interface Agent {

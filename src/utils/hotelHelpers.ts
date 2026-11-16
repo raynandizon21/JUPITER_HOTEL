@@ -185,3 +185,10 @@ export function exportToCSV(reservations: Reservation[], filename = 'hotel_reser
 export function nightsLabel(n: number, en = true): string {
   return en ? `${n} ${n === 1 ? 'night' : 'nights'}` : `${n}박`;
 }
+
+/** "1-Oct-26" — short date like the hotel's transaction sheet (used in the Daily Settlement table). */
+export function formatShortDate(dateStr: string): string {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  const mon = d.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' });
+  return `${d.getUTCDate()}-${mon}-${String(d.getUTCFullYear()).slice(2)}`;
+}

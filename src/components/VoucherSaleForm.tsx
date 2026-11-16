@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { Agent, CasinoRatesConfig, FolioCharge, VoucherSale } from '../types/hotel';
 import { peso, todayISO, uid, voucherTotals, chargeAmount } from '../utils/billing';
@@ -29,12 +29,17 @@ export const VoucherSaleForm: React.FC<{
 
   const total = items.reduce((a, c) => a + chargeAmount(c), 0);
   const canSave = guestName.trim() && date && items.length > 0;
+  // nothing to charge (all free) → the guest owes nothing, so it is paid in full (same as room bookings)
+  const nothingDue = items.length > 0 && total === 0;
+  useEffect(() => {
+    if (nothingDue) setPaidNow(true);
+  }, [nothingDue]);
 
   const save = () => {
     if (!canSave) return;
     // keep the original payments if they still cover the total exactly; otherwise one payment for the total
     const keep = initial && initialPaid && voucherTotals({ ...initial, items }).balance === 0;
-    const payments = paidNow
+    const payments = paidNow && total > 0
       ? keep
         ? initial!.payments
         : [{ id: uid(), date, amount: total, method: 'Cash' as const, reference: en ? 'Paid at purchase' : '구매 시 결제' }]
@@ -92,10 +97,17 @@ export const VoucherSaleForm: React.FC<{
             <button type="button" data-active={paidNow} onClick={() => setPaidNow(true)} className="flex-1">
               {en ? 'Paid in full now' : '지금 전액 결제'}
             </button>
-            <button type="button" data-active={!paidNow} onClick={() => setPaidNow(false)} className="flex-1">
+            <button
+              type="button"
+              data-active={!paidNow}
+              disabled={nothingDue}
+              onClick={() => setPaidNow(false)}
+              className="flex-1 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
               {en ? 'Bill later' : '나중에 청구'}
             </button>
           </div>
+          {nothingDue && <div className="text-[11px] text-ok mt-1">{en ? 'Nothing to charge — marked as paid' : '청구 금액 없음 — 결제 완료로 처리'}</div>}
         </div>
 
         <div className="col-span-2">

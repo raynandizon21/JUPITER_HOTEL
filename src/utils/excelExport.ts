@@ -261,14 +261,14 @@ export async function exportSettlementExcel(month: string, bookings: Reservation
  */
 export async function exportDailyExcel(
   month: string,
-  rows: { date: string; checkIns: number; inHouse: number; nights: number; total: number; paid: number; paidAmount: number; unpaid: number; unpaidAmount: number; voucherAmount: number }[],
+  rows: { date: string; checkIns: number; inHouse: number; nights: number; total: number; roomAmount: number; extrasAmount: number; paid: number; paidAmount: number; unpaid: number; unpaidAmount: number; voucherAmount: number }[],
   roomsInUse: number
 ) {
   const ExcelJS = (await import('exceljs')).default;
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Jupiter Hotel PMS';
   const ws = wb.addWorksheet('Daily Settlement', { views: [{ state: 'frozen', ySplit: 6, showGridLines: false }] });
-  ws.columns = [{ width: 22 }, { width: 14 }, { width: 18 }, { width: 16 }, { width: 18 }, { width: 22 }, { width: 14 }, { width: 22 }, { width: 22 }];
+  ws.columns = [{ width: 14 }, { width: 14 }, { width: 14 }, { width: 18 }, { width: 18 }, { width: 18 }, { width: 18 }, { width: 18 }, { width: 22 }];
   const NAVY = 'FF1F3A5F';
   const thin = { style: 'thin' as const, color: { argb: 'FFD0D3DA' } };
 
@@ -295,8 +295,8 @@ export async function exportDailyExcel(
   ws.getCell('F3').numFmt = '0"실"';
   ws.getCell('F3').font = { bold: true };
 
-  const ko = ['날짜', '체크인 목록', '체크인 (예약 건수)', '총 숙박 박수', '결제 완료', '결제 금액 (PHP)', '미결제 건수', '미결제 금액 (PHP)', '바우처 판매 (PHP)'];
-  const enH = ['Date', 'Check-in List', 'Check-ins (Number of Reservations)', 'Total Nights Stayed', 'Paid (Bookings)', 'Paid Amount', 'Unpaid (Bookings)', 'Unpaid Amount', 'Vouchers Sold (for record)'];
+  const ko = ['날짜', '체크인 목록', '계속 투숙', '객실 요금 (PHP)', '뷔페·추가 (PHP)', '총 금액 (PHP)', '결제 금액 (PHP)', '미결제 금액 (PHP)', '바우처 판매 (PHP)'];
+  const enH = ['Date', 'Check-in List', 'Still Staying', 'Room', 'Buffet / Extras', 'Total Amount', 'Paid Amount', 'Unpaid Amount', 'Vouchers Sold (for record)'];
   ws.getRow(5).values = ko;
   ws.getRow(6).values = enH;
   [5, 6].forEach((r) => {
@@ -308,26 +308,27 @@ export async function exportDailyExcel(
     ws.getRow(r).height = 20;
   });
 
-  const fmts = [DATE, '0"건"', '0"명"', '0"박"', '0"건"', PESO, '0"건"', PESO, PESO];
+  const fmts = ['d-mmm-yy', '0"건"', '0"건"', PESO, PESO, PESO, PESO, PESO, PESO];
   rows.forEach((r, i) => {
     const row = ws.getRow(7 + i);
-    row.values = [toDate(r.date), r.checkIns, r.inHouse, r.nights, r.paid, r.paidAmount, r.unpaid, r.unpaidAmount, r.voucherAmount];
+    row.values = [toDate(r.date), r.checkIns, r.inHouse - r.checkIns, r.roomAmount, r.extrasAmount, r.total, r.paidAmount, r.unpaidAmount, r.voucherAmount];
     row.eachCell({ includeEmpty: true }, (c, col) => {
       c.numFmt = fmts[col - 1];
       c.border = { top: thin, bottom: thin, left: thin, right: thin };
       c.alignment = { horizontal: col === 1 ? 'center' : 'right' };
       if (col === 1 && getDayCategory(r.date) === 'weekend') c.font = { color: { argb: 'FFC0662B' }, bold: true };
-      if ((col === 5 || col === 6) && (col === 5 ? r.paid : r.paidAmount)) c.font = { color: { argb: 'FF2E7A57' }, bold: true };
-      if ((col === 7 || col === 8) && (col === 7 ? r.unpaid : r.unpaidAmount)) c.font = { color: { argb: 'FFB4372C' }, bold: true };
+      if (col === 6 && r.total) c.font = { bold: true };
+      if (col === 7 && r.paidAmount) c.font = { color: { argb: 'FF2E7A57' }, bold: true };
+      if (col === 8 && r.unpaidAmount) c.font = { color: { argb: 'FFB4372C' }, bold: true };
       if (col === 9 && r.voucherAmount) c.font = { color: { argb: 'FFA86A12' }, bold: true };
     });
     if (r.checkIns) row.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE9EFFC' } };
   });
   const end = 7 + rows.length;
   const S = (col: string) => ({ formula: `SUM(${col}7:${col}${end - 1})` });
-  ws.getRow(end).values = ['월 합계 (Total)', S('B'), '', S('D'), S('E'), S('F'), S('G'), S('H'), S('I')];
+  ws.getRow(end).values = ['총합계 (Grand total)', S('B'), '', S('D'), S('E'), S('F'), S('G'), S('H'), S('I')];
   ws.getRow(end).eachCell({ includeEmpty: true }, (c, col) => {
-    c.numFmt = fmts[col - 1] === DATE ? '@' : fmts[col - 1];
+    c.numFmt = col === 1 ? '@' : fmts[col - 1];
     c.font = { bold: true };
     c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SOFT } };
     c.border = { top: { style: 'medium', color: { argb: INK } } };
@@ -341,4 +342,81 @@ export async function exportDailyExcel(
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+/**
+ * Fund ledger → "Fund_YYYY-MM.xlsx" (or Fund_all.xlsx): date, description, fund, method, in, out, balance, status.
+ * `rows` are oldest first, with the running balance already worked out (see FundPage).
+ */
+export async function exportFundExcel(
+  month: string,
+  fundLabel: string,
+  rows: { date: string; label: string; sub: string; fund: 'room' | 'voucher'; method: string; dir: 'in' | 'out'; amount: number; balance: number; voided: boolean }[]
+) {
+  const ExcelJS = (await import('exceljs')).default;
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Jupiter Hotel PMS';
+  const ws = wb.addWorksheet('Fund ledger', { views: [{ state: 'frozen', ySplit: 4 }] });
+  ws.columns = [{ width: 20 }, { width: 42 }, { width: 11 }, { width: 16 }, { width: 15 }, { width: 15 }, { width: 16 }, { width: 10 }];
+
+  ws.mergeCells('A1:H1');
+  ws.getCell('A1').value = `Fund ledger — ${fundLabel}`;
+  ws.getCell('A1').font = { bold: true, size: 15 };
+  ws.mergeCells('A2:H2');
+  ws.getCell('A2').value = `${month ? formatMonth(month) : 'All months'} · Jupiter Junket`;
+  ws.getCell('A2').font = { color: { argb: 'FF6B6E76' } };
+
+  ws.getRow(4).values = ['Date', 'Description', 'Fund', 'Method', 'In', 'Out', 'Balance', 'Status'];
+  ws.getRow(4).eachCell((c) => {
+    c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } };
+    c.alignment = { vertical: 'middle', horizontal: 'center' };
+  });
+  ws.getRow(4).height = 22;
+
+  rows.forEach((r, i) => {
+    const row = ws.getRow(5 + i);
+    row.values = [
+      toDate(r.date),
+      r.sub ? `${r.label} — ${r.sub}` : r.label,
+      r.fund === 'room' ? 'Room' : 'Voucher',
+      r.method,
+      r.dir === 'in' ? r.amount : null,
+      r.dir === 'out' ? r.amount : null,
+      r.balance,
+      r.voided ? 'VOIDED' : '',
+    ];
+    row.getCell(1).numFmt = DATE;
+    [5, 6, 7].forEach((c) => (row.getCell(c).numFmt = PESO));
+    row.getCell(5).font = { color: { argb: 'FF2E7A57' } };
+    row.getCell(6).font = { color: { argb: 'FFB4372C' } };
+    if (r.voided) row.eachCell((c) => (c.font = { ...(c.font || {}), strike: true, color: { argb: 'FF9A9DA5' } }));
+  });
+
+  const end = 5 + rows.length;
+  const counted = rows.filter((r) => !r.voided);
+  ws.getRow(end).values = [
+    'TOTAL',
+    `${rows.length} entries`,
+    '',
+    '',
+    counted.filter((r) => r.dir === 'in').reduce((s, r) => s + r.amount, 0),
+    counted.filter((r) => r.dir === 'out').reduce((s, r) => s + r.amount, 0),
+    rows.length ? rows[rows.length - 1].balance : 0,
+    '',
+  ];
+  [5, 6, 7].forEach((c) => (ws.getCell(end, c).numFmt = PESO));
+  ws.getRow(end).eachCell((c) => {
+    c.font = { bold: true };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SOFT } };
+    c.border = { top: { style: 'medium', color: { argb: INK } } };
+  });
+
+  const buf = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const link = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `Fund_${month || 'all'}.xlsx` });
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 }

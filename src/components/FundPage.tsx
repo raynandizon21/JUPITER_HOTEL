@@ -55,6 +55,11 @@ const timeOf = (at: string) => {
 const whoOf = (agent: string | undefined, guest: string) => [agent?.trim(), guest].filter(Boolean).join(' - ');
 
 const fmtRef = (ref?: string) => (ref && /^[1-9]\d{3,}$/.test(ref.trim()) ? Number(ref.trim()).toLocaleString('en-US') : ref);
+// Reference to show for a payment: hidden when it is just the amount typed again (e.g. "25300" for ₱25,300).
+const refOf = (p: { reference?: string; amount: number }) => {
+  const ref = (p.reference || '').trim().replace(/,/g, '');
+  return ref && Number(ref) === p.amount ? '' : fmtRef(p.reference);
+};
 
 export function buildFundEntries(
   reservations: Reservation[],
@@ -76,7 +81,7 @@ export function buildFundEntries(
         kind: 'guest',
         label: en ? 'Room payment' : '객실 결제',
         who: whoOf(r.agentName, r.guestName),
-        sub: [p.method, fmtRef(p.reference)].filter(Boolean).join(' · '),
+        sub: [p.method, refOf(p)].filter(Boolean).join(' · '),
         res: r,
         pay: p,
         at: p.recordedAt || '',
@@ -94,7 +99,7 @@ export function buildFundEntries(
         kind: 'voucher',
         label: en ? 'Voucher payment' : '바우처 결제',
         who: whoOf(v.agentName, v.guestName),
-        sub: [p.method, fmtRef(p.reference)].filter(Boolean).join(' · '),
+        sub: [p.method, refOf(p)].filter(Boolean).join(' · '),
         vs: v,
         pay: p,
         at: p.recordedAt || '',
@@ -112,7 +117,7 @@ export function buildFundEntries(
         kind: 'hotel',
         label: `${en ? 'Payment to hotel' : '호텔 지급'} · ${formatMonth(s.month)}`,
         who: '',
-        sub: [p.method, fmtRef(p.reference), p.oic && `OIC ${p.oic}`].filter(Boolean).join(' · '),
+        sub: [p.method, refOf(p), p.oic && `OIC ${p.oic}`].filter(Boolean).join(' · '),
         pay: p,
         at: p.recordedAt || '',
         month: s.month,

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { Agent, CasinoRatesConfig, FolioCharge, VoucherSale } from '../types/hotel';
-import { peso, todayISO, uid, voucherTotals, chargeAmount } from '../utils/billing';
+import { peso, nowStamp, todayISO, uid, voucherTotals, chargeAmount } from '../utils/billing';
 import { formatLongDate } from '../utils/hotelHelpers';
 import { ChargeAmountText, FreeCheck } from './StayBreakdown';
 import { ComboInput, Select } from './ui';
@@ -42,7 +42,7 @@ export const VoucherSaleForm: React.FC<{
     const payments = paidNow && total > 0
       ? keep
         ? initial!.payments
-        : [{ id: uid(), date, amount: total, method: 'Cash' as const, reference: en ? 'Paid at purchase' : '구매 시 결제' }]
+        : [{ id: uid(), date, amount: total, method: 'Cash' as const, reference: en ? 'Paid at purchase' : '구매 시 결제', recordedAt: nowStamp() }]
       : [];
     onSave({
       id: initial?.id ?? `vch-${Date.now()}`,

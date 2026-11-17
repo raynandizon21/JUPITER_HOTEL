@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { DailySettlement } from './DailySettlement';
 import { Reservation, CasinoRatesConfig, Settlement, PaymentMethod, FolioPayment, VoucherSale } from '../types/hotel';
-import { folioOf, settlementOf, PAYMENT_METHODS, uid, todayISO, printDocument, escapeHtml as esc } from '../utils/billing';
+import { folioOf, settlementOf, PAYMENT_METHODS, uid, nowStamp, todayISO, printDocument, escapeHtml as esc } from '../utils/billing';
 import { GuestFolio } from './GuestFolio';
 import { exportSettlementExcel } from '../utils/excelExport';
 import { formatCurrency, calculateCasinoStayPrice, formatLongDate, formatMonth, formatDateRange, nightsLabel } from '../utils/hotelHelpers';
@@ -115,7 +115,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
       setConfirmPay({ kind: 'edit', pay: editingPay });
       return;
     }
-    const p: FolioPayment = { id: uid(), date: payDate, amount: payAmount, method: payMethod, reference: payRef.trim(), oic: payOic.trim(), remarks: payRemarks.trim() };
+    const p: FolioPayment = { id: uid(), date: payDate, amount: payAmount, method: payMethod, reference: payRef.trim(), oic: payOic.trim(), remarks: payRemarks.trim(), recordedAt: nowStamp() };
     setSettlements((prev) => {
       const exists = prev.some((x) => x.month === month);
       return exists ? prev.map((x) => (x.month === month ? { ...x, payments: [...x.payments, p] } : x)) : [...prev, { month, payments: [p] }];

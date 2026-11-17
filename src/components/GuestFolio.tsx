@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Plus, Trash2, Printer, Receipt, CreditCard, BedDouble, BedSingle, UtensilsCrossed, Tag, Pencil, Check, X } from 'lucide-react';
 import { CasinoRatesConfig, FolioCharge, FolioPayment, PaymentMethod, Reservation } from '../types/hotel';
-import { folioOf, syncStatus, uid, todayISO, PAYMENT_METHODS, peso, printDocument, escapeHtml as esc } from '../utils/billing';
+import { folioOf, syncStatus, uid, nowStamp, todayISO, PAYMENT_METHODS, peso, printDocument, escapeHtml as esc } from '../utils/billing';
 import { formatLongDate, getNightlyRates, formatDateRange } from '../utils/hotelHelpers';
 import { ConfirmDialog, Dialog, toast, Select } from './ui';
 import { NightBadge, NightRateText, ChargeAmountText, FreeCheck } from './StayBreakdown';
@@ -119,7 +119,7 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
   const [pRef, setPRef] = useState('');
   const addPayment = () => {
     if (pAmount <= 0) return;
-    const p: FolioPayment = { id: uid(), date: pDate, amount: pAmount, method: pMethod, reference: pRef.trim() };
+    const p: FolioPayment = { id: uid(), date: pDate, amount: pAmount, method: pMethod, reference: pRef.trim(), recordedAt: nowStamp() };
     const next = syncStatus({ ...r, payments: [...payments, p] });
     onChange(next);
     setPRef('');

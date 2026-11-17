@@ -39,7 +39,8 @@ To check for dead code, run `npx tsc --noEmit --noUnusedLocals --noUnusedParamet
 - The app starts **empty**: there is no sample or demo data. The **Clear data** sidebar button is hidden (pass `onClearData` to `Sidebar` to show it again).
 - **MySQL schema** is in `database/schema.sql` (7 tables). `scripts/init-db.mjs` applies it on `npm run dev` using the `DB_*` values in `.env`.
   - It only uses `CREATE … IF NOT EXISTS` and `INSERT IGNORE`, so it is safe to re-run.
-  - Columns added later (`booking.CURRENCY`, `booking.IS_JUPITER_GUEST`, `booking.APP_ID`) and the voucher tables are added by `ensureColumns` in `server/index.js` when the backend starts.
+  - Columns added later (`booking.CURRENCY`, `booking.IS_JUPITER_GUEST`, `booking.APP_ID`, `RECORDED_AT` on the 3 payment tables) and the voucher tables are added by `ensureColumns` in `server/index.js` when the backend starts.
+  - **Payment time** (`FolioPayment.recordedAt` → `RECORDED_AT`): set with `nowStamp()` when a payment is added. Payment lists are DELETE + INSERT on save, so `paymentTimes()` in the server carries the old time over. The Fund ledger shows it under the date.
 - **Dev:** `npm run dev:all` runs the backend (`server/index.js`, restarts on change) and Vite together; `npm run dev` is Vite only. Vite proxies `/api` to `API_PORT` from `.env`, and prints API / Database status under the Local/Network lines.
 - Old saved bookings are upgraded on load by `migrateReservation` (`src/utils/billing.ts`). Keep that function working when you change the `Reservation` shape.
 

@@ -3,6 +3,13 @@ import { FolioPayment, PaymentMethod, Reservation, Settlement, VoucherSale, Foli
 export const PAYMENT_METHODS: PaymentMethod[] = ['Cash', 'Bank Transfer', 'GCash', 'Credit Card', 'Junket Account'];
 
 export const uid = () => Math.random().toString(36).slice(2, 10);
+/** Local date-time 'YYYY-MM-DD HH:MM:SS' — when a payment is recorded (FolioPayment.recordedAt). */
+export const nowStamp = () => {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+};
+
 export const todayISO = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;

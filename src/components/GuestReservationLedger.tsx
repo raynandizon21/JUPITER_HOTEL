@@ -3,7 +3,7 @@ import { Agent, Holiday, Reservation, CasinoRatesConfig, PaymentStatus, VoucherS
 import { getReferenceMonth, exportToCSV, getNightlyRates, addDays, formatLongDate, formatMonth, formatDateRange, nightsLabel, getStayNights, getDaysInMonth } from '../utils/hotelHelpers';
 import { Plus, Search, Download, Pencil, Trash2, Sparkles, Receipt, Ticket, BedDouble, Settings2 } from 'lucide-react';
 import { GuestFolio, FolioStatusBadge } from './GuestFolio';
-import { folioOf, syncStatus, uid, peso, todayISO, voucherTotals, chargeAmount } from '../utils/billing';
+import { folioOf, syncStatus, uid, peso, nowStamp, todayISO, voucherTotals, chargeAmount } from '../utils/billing';
 import { Language, translations } from '../i18n/translations';
 import { PageHeader, Dialog, ConfirmDialog, ComboInput, Pager, toast, Select } from './ui';
 import { VoucherSaleForm, VoucherItemsEditor } from './VoucherSaleForm';
@@ -299,7 +299,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
         charges: buildAddonCharges(),
         payments:
           formPaymentStatus === '결제완료' && formAmount + addonTotal > 0
-            ? [{ id: uid(), date: formCheckIn, amount: formAmount + addonTotal, method: 'Cash', reference: en ? 'Paid at booking' : '예약 시 결제' }]
+            ? [{ id: uid(), date: formCheckIn, amount: formAmount + addonTotal, method: 'Cash', reference: en ? 'Paid at booking' : '예약 시 결제', recordedAt: nowStamp() }]
             : [],
       };
       setReservations((prev) => [syncStatus(newRes), ...prev]);

@@ -351,22 +351,22 @@ export async function exportDailyExcel(
 export async function exportFundExcel(
   month: string,
   fundLabel: string,
-  rows: { date: string; label: string; sub: string; fund: 'room' | 'voucher'; method: string; dir: 'in' | 'out'; amount: number; balance: number; voided: boolean }[]
+  rows: { date: string; who: string; label: string; sub: string; fund: 'room' | 'voucher'; method: string; dir: 'in' | 'out'; amount: number; balance: number; voided: boolean }[]
 ) {
   const ExcelJS = (await import('exceljs')).default;
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Jupiter Hotel PMS';
   const ws = wb.addWorksheet('Fund ledger', { views: [{ state: 'frozen', ySplit: 4 }] });
-  ws.columns = [{ width: 20 }, { width: 42 }, { width: 11 }, { width: 16 }, { width: 15 }, { width: 15 }, { width: 16 }, { width: 10 }];
+  ws.columns = [{ width: 20 }, { width: 28 }, { width: 42 }, { width: 11 }, { width: 16 }, { width: 15 }, { width: 15 }, { width: 16 }, { width: 10 }];
 
-  ws.mergeCells('A1:H1');
+  ws.mergeCells('A1:I1');
   ws.getCell('A1').value = `Fund ledger — ${fundLabel}`;
   ws.getCell('A1').font = { bold: true, size: 15 };
-  ws.mergeCells('A2:H2');
+  ws.mergeCells('A2:I2');
   ws.getCell('A2').value = `${month ? formatMonth(month) : 'All months'} · Jupiter Junket`;
   ws.getCell('A2').font = { color: { argb: 'FF6B6E76' } };
 
-  ws.getRow(4).values = ['Date', 'Description', 'Fund', 'Method', 'In', 'Out', 'Balance', 'Status'];
+  ws.getRow(4).values = ['Date', 'Agent - Guest name', 'Description', 'Fund', 'Method', 'In', 'Out', 'Balance', 'Status'];
   ws.getRow(4).eachCell((c) => {
     c.font = { bold: true, color: { argb: 'FFFFFFFF' } };
     c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: INK } };
@@ -378,6 +378,7 @@ export async function exportFundExcel(
     const row = ws.getRow(5 + i);
     row.values = [
       toDate(r.date),
+      r.who,
       r.sub ? `${r.label} — ${r.sub}` : r.label,
       r.fund === 'room' ? 'Room' : 'Voucher',
       r.method,
@@ -387,9 +388,9 @@ export async function exportFundExcel(
       r.voided ? 'VOIDED' : '',
     ];
     row.getCell(1).numFmt = DATE;
-    [5, 6, 7].forEach((c) => (row.getCell(c).numFmt = PESO));
-    row.getCell(5).font = { color: { argb: 'FF2E7A57' } };
-    row.getCell(6).font = { color: { argb: 'FFB4372C' } };
+    [6, 7, 8].forEach((c) => (row.getCell(c).numFmt = PESO));
+    row.getCell(6).font = { color: { argb: 'FF2E7A57' } };
+    row.getCell(7).font = { color: { argb: 'FFB4372C' } };
     if (r.voided) row.eachCell((c) => (c.font = { ...(c.font || {}), strike: true, color: { argb: 'FF9A9DA5' } }));
   });
 
@@ -397,6 +398,7 @@ export async function exportFundExcel(
   const counted = rows.filter((r) => !r.voided);
   ws.getRow(end).values = [
     'TOTAL',
+    '',
     `${rows.length} entries`,
     '',
     '',
@@ -405,7 +407,7 @@ export async function exportFundExcel(
     rows.length ? rows[rows.length - 1].balance : 0,
     '',
   ];
-  [5, 6, 7].forEach((c) => (ws.getCell(end, c).numFmt = PESO));
+  [6, 7, 8].forEach((c) => (ws.getCell(end, c).numFmt = PESO));
   ws.getRow(end).eachCell((c) => {
     c.font = { bold: true };
     c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: SOFT } };

@@ -213,6 +213,9 @@ async function ensureColumns() {
     ['booking', 'COMP_DATES', "JSON NULL COMMENT 'complimentary (free) nights' AFTER `HOLIDAY_DATES`"],
     ['booking_charges', 'IS_FREE', "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1 = complimentary, charged 0' AFTER `UNIT_PRICE`"],
     ['voucher_sale_items', 'IS_FREE', "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1 = complimentary, charged 0' AFTER `UNIT_PRICE`"],
+    ['booking_payments', 'RECORDED_AT', "DATETIME NULL COMMENT 'when the payment was first recorded (kept when the list is re-saved)' AFTER `REFERENCE`"],
+    ['hotel_payments', 'RECORDED_AT', "DATETIME NULL COMMENT 'when the payment was first recorded (kept when the list is re-saved)' AFTER `REMARKS`"],
+    ['voucher_sale_payments', 'RECORDED_AT', "DATETIME NULL COMMENT 'when the payment was first recorded (kept when the list is re-saved)' AFTER `REFERENCE`"],
   ];
   for (const [table, col, def] of wanted) {
     const [rows] = await pool.query(
@@ -221,6 +224,12 @@ async function ensureColumns() {
     );
     if (!rows.length) await pool.query(`ALTER TABLE \`${table}\` ADD COLUMN \`${col}\` ${def}`);
   }
+  // payments saved before RECORDED_AT existed: best guess = when the row was written
+  await pool.query('UPDATE booking_payments SET RECORDED_AT = CREATED_DT WHERE RECORDED_AT IS NULL');
+  await pool.query('UPDATE hotel_payments SET RECORDED_AT = CREATED_DT WHERE RECORDED_AT IS NULL');
+  await pool.query(
+    'UPDATE voucher_sale_payments p JOIN voucher_sales v ON v.IDNo = p.SALE_ID SET p.RECORDED_AT = v.CREATED_DT WHERE p.RECORDED_AT IS NULL'
+  );
 
   // APP_ID = the app's own booking id (key for saving). CONFIRM_NUM = the hotel's confirmation
   // number, typed in by staff, optional but unique. Older rows stored the app id in CONFIRM_NUM:
@@ -235,6 +244,31 @@ async function ensureColumns() {
     await pool.query("ALTER TABLE `booking` MODIFY `CONFIRM_NUM` VARCHAR(50) NULL COMMENT 'hotel confirmation number (unique)'");
     await pool.query('UPDATE `booking` SET `CONFIRM_NUM` = NULL WHERE `CONFIRM_NUM` = `APP_ID`');
   }
+}
+
+/**
+ * Payment lists are replaced as a whole on every save (DELETE + INSERT), so the time a payment
+ * was recorded would be lost. Read the old times first; each payment keeps the time the app sent
+ * (recordedAt), else the time of the same old payment (date + amount + method + reference),
+ * else now.
+ */
+async function paymentTimes(conn, table, where, params) {
+  const [[{ now }]] = await conn.query('SELECT NOW() AS now');
+  const [old] = await conn.query(`SELECT PAY_DATE, AMOUNT, METHOD, REFERENCE, RECORDED_AT FROM \`${table}\` WHERE ${where} ORDER BY IDNo`, params);
+  const key = (d, a, m, r) => `${String(d).slice(0, 10)}|${Number(a)}|${m}|${r || ''}`;
+  const left = new Map();
+  for (const o of old) {
+    if (!o.RECORDED_AT) continue;
+    const k = key(o.PAY_DATE, o.AMOUNT, o.METHOD, o.REFERENCE);
+    if (!left.has(k)) left.set(k, []);
+    left.get(k).push(o.RECORDED_AT);
+  }
+  const valid = (t) => typeof t === 'string' && /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?$/.test(t);
+  return (p, date, method) => {
+    if (valid(p.recordedAt)) return p.recordedAt.replace('T', ' ');
+    const list = left.get(key(date, p.amount, method, p.reference ? String(p.reference).slice(0, 100) : null));
+    return (list && list.shift()) || now;
+  };
 }
 
 const app = express();
@@ -395,6 +429,7 @@ app.get(
         amount: p.AMOUNT,
         method: p.METHOD,
         reference: p.REFERENCE || '',
+        recordedAt: p.RECORDED_AT || '',
       })),
     }));
 
@@ -409,6 +444,7 @@ app.get(
         reference: p.REFERENCE || '',
         oic: p.OIC || '',
         remarks: p.REMARKS || '',
+        recordedAt: p.RECORDED_AT || '',
       });
     }
     const settlements = [...months].map(([month, payments]) => ({ month, payments }));
@@ -444,6 +480,7 @@ app.get(
         amount: p.AMOUNT,
         method: p.METHOD,
         reference: p.REFERENCE || '',
+        recordedAt: p.RECORDED_AT || '',
       })),
     }));
 
@@ -458,6 +495,7 @@ app.get(
       purpose: f.PURPOSE,
       releasedBy: f.RELEASED_BY || '',
       receivedBy: f.RECEIVED_BY || '',
+      createdAt: f.CREATED_DT || '',
       reference: f.REFERENCE || '',
       remarks: f.REMARKS || '',
       voided: !!f.VOIDED,
@@ -611,6 +649,7 @@ app.put(
       }
 
       // Charges and payments are replaced as a whole (the app always sends the full lists).
+      const timeOf = await paymentTimes(conn, 'booking_payments', 'BOOKING_ID = ?', [bookingId]);
       await conn.query('DELETE FROM booking_charges WHERE BOOKING_ID = ?', [bookingId]);
       await conn.query('DELETE FROM booking_payments WHERE BOOKING_ID = ?', [bookingId]);
       const charges = (r.charges || []).filter((c) => Number(c.qty) > 0);
@@ -635,16 +674,13 @@ app.put(
       if (payments.length) {
         const methods = ['Cash', 'Bank Transfer', 'GCash', 'Credit Card', 'Junket Account'];
         await conn.query(
-          'INSERT INTO booking_payments (BOOKING_ID, PAY_DATE, AMOUNT, METHOD, REFERENCE, CREATED_BY) VALUES ?',
+          'INSERT INTO booking_payments (BOOKING_ID, PAY_DATE, AMOUNT, METHOD, REFERENCE, RECORDED_AT, CREATED_BY) VALUES ?',
           [
-            payments.map((p) => [
-              bookingId,
-              p.date || r.checkIn,
-              Number(p.amount),
-              methods.includes(p.method) ? p.method : 'Cash',
-              p.reference ? String(p.reference).slice(0, 100) : null,
-              SYSTEM_USER,
-            ]),
+            payments.map((p) => {
+              const date = p.date || r.checkIn;
+              const method = methods.includes(p.method) ? p.method : 'Cash';
+              return [bookingId, date, Number(p.amount), method, p.reference ? String(p.reference).slice(0, 100) : null, timeOf(p, date, method), SYSTEM_USER];
+            }),
           ]
         );
       }
@@ -673,21 +709,26 @@ app.put(
     const payments = ((req.body && req.body.payments) || []).filter((p) => Number(p.amount) > 0);
 
     await inTransaction(async (conn) => {
+      const timeOf = await paymentTimes(conn, 'hotel_payments', 'SETTLE_MONTH = ?', [month]);
       await conn.query('DELETE FROM hotel_payments WHERE SETTLE_MONTH = ?', [month]);
       if (payments.length) {
         await conn.query(
-          'INSERT INTO hotel_payments (SETTLE_MONTH, PAY_DATE, AMOUNT, METHOD, REFERENCE, OIC, REMARKS, CREATED_BY) VALUES ?',
+          'INSERT INTO hotel_payments (SETTLE_MONTH, PAY_DATE, AMOUNT, METHOD, REFERENCE, OIC, REMARKS, RECORDED_AT, CREATED_BY) VALUES ?',
           [
-            payments.map((p) => [
-              month,
-              p.date,
-              Number(p.amount),
-              methods.includes(p.method) ? p.method : 'Bank Transfer',
-              p.reference ? String(p.reference).slice(0, 100) : null,
-              p.oic ? String(p.oic).slice(0, 100) : null,
-              p.remarks ? String(p.remarks).slice(0, 500) : null,
-              SYSTEM_USER,
-            ]),
+            payments.map((p) => {
+              const method = methods.includes(p.method) ? p.method : 'Bank Transfer';
+              return [
+                month,
+                p.date,
+                Number(p.amount),
+                method,
+                p.reference ? String(p.reference).slice(0, 100) : null,
+                p.oic ? String(p.oic).slice(0, 100) : null,
+                p.remarks ? String(p.remarks).slice(0, 500) : null,
+                timeOf(p, p.date, method),
+                SYSTEM_USER,
+              ];
+            }),
           ]
         );
       }
@@ -762,6 +803,7 @@ app.put(
         saleId = ins.insertId;
       }
       // Items and payments are replaced as a whole (the app always sends the full lists).
+      const timeOf = await paymentTimes(conn, 'voucher_sale_payments', 'SALE_ID = ?', [saleId]);
       await conn.query('DELETE FROM voucher_sale_items WHERE SALE_ID = ?', [saleId]);
       await conn.query('DELETE FROM voucher_sale_payments WHERE SALE_ID = ?', [saleId]);
       await conn.query('INSERT INTO voucher_sale_items (SALE_ID, CATEGORY, DESCRIPTION, QTY, UNIT_PRICE, IS_FREE) VALUES ?', [
@@ -777,14 +819,12 @@ app.put(
       const payments = (v.payments || []).filter((p) => Number(p.amount) > 0);
       if (payments.length) {
         const methods = ['Cash', 'Bank Transfer', 'GCash', 'Credit Card', 'Junket Account'];
-        await conn.query('INSERT INTO voucher_sale_payments (SALE_ID, PAY_DATE, AMOUNT, METHOD, REFERENCE) VALUES ?', [
-          payments.map((p) => [
-            saleId,
-            p.date || v.date,
-            Number(p.amount),
-            methods.includes(p.method) ? p.method : 'Cash',
-            p.reference ? String(p.reference).slice(0, 100) : null,
-          ]),
+        await conn.query('INSERT INTO voucher_sale_payments (SALE_ID, PAY_DATE, AMOUNT, METHOD, REFERENCE, RECORDED_AT) VALUES ?', [
+          payments.map((p) => {
+            const date = p.date || v.date;
+            const method = methods.includes(p.method) ? p.method : 'Cash';
+            return [saleId, date, Number(p.amount), method, p.reference ? String(p.reference).slice(0, 100) : null, timeOf(p, date, method)];
+          }),
         ]);
       }
     });

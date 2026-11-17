@@ -1,8 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { ArrowDownLeft, ArrowUpRight, Ban, Banknote, FileSpreadsheet, Landmark, Minus, PiggyBank, Plus, Printer, Search, Ticket, Wallet } from 'lucide-react';
-import { FundTxn, PaymentMethod, Reservation, Settlement, VoucherSale } from '../types/hotel';
-import { escapeHtml as esc, peso, printDocument, todayISO, uid } from '../utils/billing';
-import { formatLongDate, formatMonth, formatShortDate, getDaysInMonth } from '../utils/hotelHelpers';
+import { FolioPayment, FundTxn, PaymentMethod, Reservation, Settlement, VoucherSale } from '../types/hotel';
+import { chargeAmount, escapeHtml as esc, folioOf, peso, nowStamp, printDocument, todayISO, uid, voucherTotals } from '../utils/billing';
+import { formatDateRange, formatLongDate, formatMonth, formatShortDate, getDaysInMonth, nightsLabel } from '../utils/hotelHelpers';
 import { Language } from '../i18n/translations';
 import { ComboInput, Dialog, PageHeader, Pager, Select, toast } from './ui';
 import { DateFilter } from './DateFilter';
@@ -20,8 +20,17 @@ export interface FundEntry {
   method: PaymentMethod;
   kind: Kind;
   label: string;
+  /** "Agent - Guest name" for guest payments, '' otherwise */
+  who: string;
   sub: string;
   txn?: FundTxn;
+  /** when it was recorded, 'YYYY-MM-DD HH:MM:SS' ('' for old data without it) */
+  at: string;
+  /** where the line comes from — shown in the details pop-up */
+  res?: Reservation;
+  vs?: VoucherSale;
+  pay?: FolioPayment;
+  month?: string;
   voided: boolean;
   balance: number; // running balance of the shown fund(s) after this line
 }
@@ -34,6 +43,19 @@ const OUT_METHODS: PaymentMethod[] = ['Cash', 'Bank Transfer', 'GCash'];
  *  in  — guest payments on room bookings (room fund) and on voucher-only purchases (voucher fund), opening balances
  *  out — payments to the hotel (room fund) and manual cash outs
  */
+/** A reference typed as a plain number (e.g. 25300) shows with commas → 25,300. Codes like 000123 or OR-55 stay as typed. */
+/** '2026-11-17 15:42:08' → '3:42 PM' */
+const timeOf = (at: string) => {
+  const m = /[ T](\d{2}):(\d{2})/.exec(at);
+  if (!m) return '';
+  const h = Number(m[1]);
+  return `${h % 12 || 12}:${m[2]} ${h < 12 ? 'AM' : 'PM'}`;
+};
+
+const whoOf = (agent: string | undefined, guest: string) => [agent?.trim(), guest].filter(Boolean).join(' - ');
+
+const fmtRef = (ref?: string) => (ref && /^[1-9]\d{3,}$/.test(ref.trim()) ? Number(ref.trim()).toLocaleString('en-US') : ref);
+
 export function buildFundEntries(
   reservations: Reservation[],
   voucherSales: VoucherSale[],
@@ -52,8 +74,12 @@ export function buildFundEntries(
         amount: p.amount,
         method: p.method,
         kind: 'guest',
-        label: `${en ? 'Room payment' : '객실 결제'} · ${r.guestName}`,
-        sub: [p.method, p.reference].filter(Boolean).join(' · '),
+        label: en ? 'Room payment' : '객실 결제',
+        who: whoOf(r.agentName, r.guestName),
+        sub: [p.method, fmtRef(p.reference)].filter(Boolean).join(' · '),
+        res: r,
+        pay: p,
+        at: p.recordedAt || '',
         voided: false,
       });
   for (const v of voucherSales)
@@ -66,8 +92,12 @@ export function buildFundEntries(
         amount: p.amount,
         method: p.method,
         kind: 'voucher',
-        label: `${en ? 'Voucher payment' : '바우처 결제'} · ${v.guestName}`,
-        sub: [p.method, p.reference].filter(Boolean).join(' · '),
+        label: en ? 'Voucher payment' : '바우처 결제',
+        who: whoOf(v.agentName, v.guestName),
+        sub: [p.method, fmtRef(p.reference)].filter(Boolean).join(' · '),
+        vs: v,
+        pay: p,
+        at: p.recordedAt || '',
         voided: false,
       });
   for (const s of settlements)
@@ -81,7 +111,11 @@ export function buildFundEntries(
         method: p.method,
         kind: 'hotel',
         label: `${en ? 'Payment to hotel' : '호텔 지급'} · ${formatMonth(s.month)}`,
-        sub: [p.method, p.reference, p.oic && `OIC ${p.oic}`].filter(Boolean).join(' · '),
+        who: '',
+        sub: [p.method, fmtRef(p.reference), p.oic && `OIC ${p.oic}`].filter(Boolean).join(' · '),
+        pay: p,
+        at: p.recordedAt || '',
+        month: s.month,
         voided: false,
       });
   for (const f of fundTxns)
@@ -93,17 +127,19 @@ export function buildFundEntries(
       amount: f.amount,
       method: f.method,
       kind: f.type === 'opening' ? 'opening' : 'cashout',
+      who: '',
       label:
         f.type === 'opening'
           ? en ? 'Cash in' : '입금'
           : `${en ? 'Cash out' : '출금'} · ${purposeLabel(f.purpose, en)}${f.receivedBy ? ` · ${f.receivedBy}` : ''}`,
-      sub: [f.method, f.reference, f.releasedBy && `${en ? 'Released by' : '지급'} ${f.releasedBy}`, f.remarks].filter(Boolean).join(' · '),
+      sub: [f.method, fmtRef(f.reference), f.releasedBy && `${en ? 'Released by' : '지급'} ${f.releasedBy}`, f.remarks].filter(Boolean).join(' · '),
       txn: f,
+      at: f.createdAt || '',
       voided: f.voided,
     });
-  // oldest first; on the same day: opening → money in → money out
+  // oldest first; on the same day by the time it was recorded, then opening → money in → money out
   const order: Record<Kind, number> = { opening: 0, guest: 1, voucher: 1, hotel: 2, cashout: 2 };
-  return out.sort((a, b) => a.date.localeCompare(b.date) || order[a.kind] - order[b.kind]);
+  return out.sort((a, b) => a.date.localeCompare(b.date) || a.at.localeCompare(b.at) || order[a.kind] - order[b.kind]);
 }
 
 const purposeLabel = (p: FundTxn['purpose'], en: boolean) =>
@@ -159,6 +195,7 @@ export const FundPage: React.FC<{
   const [search, setSearch] = useState('');
   const [form, setForm] = useState<null | 'out' | 'opening'>(null);
   const [voiding, setVoiding] = useState<FundTxn | null>(null);
+  const [detail, setDetail] = useState<FundEntry | null>(null);
   const [exporting, setExporting] = useState(false);
 
   const all = useMemo(() => buildFundEntries(reservations, voucherSales, settlements, fundTxns, en), [reservations, voucherSales, settlements, fundTxns, en]);
@@ -180,11 +217,14 @@ export const FundPage: React.FC<{
   const shown = useMemo(() => {
     const q = search.trim().toLowerCase();
     return ledger
+      .filter((e) => !e.voided) // voided lines are listed in the Voided pop-up instead
       .filter((e) => (!fFrom || e.date >= fFrom) && (!fTo || e.date <= fTo))
-      .filter((e) => !q || `${e.label} ${e.sub} ${e.txn?.remarks || ''} ${e.txn?.reference || ''}`.toLowerCase().includes(q))
+      .filter((e) => !q || `${e.who} ${e.label} ${e.sub} ${e.txn?.remarks || ''} ${e.txn?.reference || ''}`.toLowerCase().includes(q))
       .slice()
       .reverse();
   }, [ledger, fFrom, fTo, search]);
+  const voidedList = useMemo(() => all.filter((e) => e.voided).map((e): FundEntry => ({ ...e, balance: 0 })).reverse(), [all]);
+  const [showVoided, setShowVoided] = useState(false);
   const monthIn = shown.filter((e) => !e.voided && e.dir === 'in').reduce((a, e) => a + e.amount, 0);
   const monthOut = shown.filter((e) => !e.voided && e.dir === 'out').reduce((a, e) => a + e.amount, 0);
 
@@ -322,6 +362,13 @@ export const FundPage: React.FC<{
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+          {voidedList.length > 0 && (
+            <button onClick={() => setShowVoided(true)} className="btn btn-outline btn-sm !rounded-full !h-[30px] text-muted hover:!text-bad">
+              <Ban className="w-3.5 h-3.5" />
+              {en ? 'Voided' : '취소됨'}
+              <span className="badge badge-bad !px-1.5 num">{voidedList.length}</span>
+            </button>
+          )}
           <div className="relative w-[260px]">
             <Search className="w-3.5 h-3.5 text-faint absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
@@ -354,7 +401,7 @@ export const FundPage: React.FC<{
         <table className="dtable">
           <thead>
             <tr>
-              <th>{en ? 'Date' : '날짜'}</th>
+              <th>{en ? 'Date / time' : '날짜 / 시간'}</th>
               <th>{en ? 'Description' : '내역'}</th>
               <th className="c">{en ? 'Fund' : '자금'}</th>
               <th className="r">{en ? 'In' : '입금'}</th>
@@ -374,8 +421,12 @@ export const FundPage: React.FC<{
             {pageRows.map((e) => {
               const Icon = e.kind === 'hotel' ? Landmark : e.dir === 'in' ? ArrowDownLeft : ArrowUpRight;
               return (
-                <tr key={e.key} className={e.voided ? 'opacity-50' : ''}>
-                  <td className="whitespace-nowrap text-ink-2">{formatLongDate(e.date)}</td>
+                <tr key={e.key} onClick={() => setDetail(e)} className={`cursor-pointer ${e.voided ? 'opacity-50' : ''}`} title={en ? 'Show details' : '상세 보기'}>
+                  <td className="whitespace-nowrap text-ink-2" title={e.at ? `${en ? 'Recorded' : '기록'} ${formatLongDate(e.at.slice(0, 10))} ${timeOf(e.at)}` : undefined}>
+                    {/* 17-Nov-26, 11:09 AM (time it was recorded; a back-dated payment shows its recorded day in the tooltip) */}
+                    {formatShortDate(e.date)}
+                    {e.at && `, ${timeOf(e.at)}`}
+                  </td>
                   <td>
                     <div className="flex items-center gap-2.5 min-w-0">
                       <span className={`w-7 h-7 rounded-lg grid place-items-center shrink-0 ${e.dir === 'in' ? 'bg-ok-soft text-ok' : 'bg-bad-soft text-bad'}`}>
@@ -387,7 +438,17 @@ export const FundPage: React.FC<{
                           {e.kind === 'cashout' && e.txn && <span className="text-muted font-normal num text-[11.5px] ml-1.5">{slipNo.get(e.txn.id)}</span>}
                         </div>
                         <div className="text-[11.5px] text-muted truncate">
-                          {e.voided ? `${en ? 'VOIDED' : '취소됨'} — ${e.txn?.voidReason || ''}` : e.sub}
+                          {e.voided ? (
+                            `${en ? 'VOIDED' : '취소됨'} — ${e.txn?.voidReason || ''}`
+                          ) : e.who ? (
+                            // method · Agent - Guest (bold) · reference …
+                            <>
+                              {e.method} · <b className="font-semibold text-ink">{e.who}</b>
+                              {e.sub.slice(e.method.length)}
+                            </>
+                          ) : (
+                            e.sub
+                          )}
                         </div>
                       </div>
                     </div>
@@ -398,7 +459,7 @@ export const FundPage: React.FC<{
                   <td className="r num text-ok whitespace-nowrap">{e.dir === 'in' ? peso(e.amount) : ''}</td>
                   <td className="r num text-bad whitespace-nowrap">{e.dir === 'out' ? peso(e.amount) : ''}</td>
                   <td className={`r num font-semibold whitespace-nowrap ${e.balance < 0 ? 'text-bad' : 'text-ink'}`}>{peso(e.balance)}</td>
-                  <td className="r whitespace-nowrap">
+                  <td className="r whitespace-nowrap" onClick={(ev) => ev.stopPropagation()}>
                     {e.txn && (
                       <>
                         {e.kind === 'cashout' && (
@@ -442,6 +503,68 @@ export const FundPage: React.FC<{
         />
       )}
 
+      {showVoided && (
+        <Dialog
+          title={en ? 'Voided entries' : '취소된 내역'}
+          subtitle={en ? 'Not counted in any balance. Click one to see its details.' : '잔액에 포함되지 않습니다. 클릭하면 상세를 볼 수 있습니다.'}
+          onClose={() => setShowVoided(false)}
+          width="max-w-xl"
+        >
+          <div className="max-h-[60vh] overflow-y-auto divide-y divide-line">
+            {voidedList.length === 0 && <div className="px-6 py-10 text-center text-muted">{en ? 'No voided entries.' : '취소된 내역이 없습니다.'}</div>}
+            {voidedList.map((e) => (
+              <button
+                key={e.key}
+                onClick={() => setDetail(e)}
+                className="w-full text-left px-6 py-3 flex items-center gap-3 hover:bg-sunken cursor-pointer"
+              >
+                <span className="w-7 h-7 rounded-lg grid place-items-center shrink-0 bg-bad-soft text-bad">
+                  <Ban className="w-3.5 h-3.5" />
+                </span>
+                <div className="min-w-0 flex-1 leading-tight">
+                  <div className="font-medium text-ink truncate">
+                    {e.label}
+                    {e.who && ` · ${e.who}`}
+                    {e.kind === 'cashout' && e.txn && <span className="text-muted font-normal num text-[11.5px] ml-1.5">{slipNo.get(e.txn.id)}</span>}
+                  </div>
+                  <div className="text-[11.5px] text-muted truncate">
+                    {formatLongDate(e.date)} · {fundName(e.fund)} · {e.txn?.voidReason || '—'}
+                  </div>
+                </div>
+                <span className="num text-muted line-through whitespace-nowrap">
+                  {e.dir === 'in' ? '+' : '−'}
+                  {peso(e.amount)}
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="px-6 py-4 border-t border-line bg-sunken flex justify-end">
+            <button onClick={() => setShowVoided(false)} className="btn btn-primary">
+              {en ? 'Close' : '닫기'}
+            </button>
+          </div>
+        </Dialog>
+      )}
+
+      {detail && (
+        <EntryDetails
+          e={detail}
+          en={en}
+          fundName={fundName}
+          slipNo={detail.txn ? slipNo.get(detail.txn.id) : undefined}
+          onClose={() => setDetail(null)}
+          onPrint={detail.kind === 'cashout' && detail.txn ? () => printSlip(detail.txn!) : undefined}
+          onVoid={
+            detail.txn && !detail.voided
+              ? () => {
+                  setVoiding(detail.txn!);
+                  setDetail(null);
+                }
+              : undefined
+          }
+        />
+      )}
+
       {voiding && (
         <VoidDialog
           en={en}
@@ -455,6 +578,118 @@ export const FundPage: React.FC<{
         />
       )}
     </div>
+  );
+};
+
+const DetailRow: React.FC<{ k: string; v?: React.ReactNode }> = ({ k, v }) =>
+  v === undefined || v === null || v === '' ? null : (
+    <div className="flex items-baseline justify-between gap-4 py-1.5 text-[13px]">
+      <span className="text-muted shrink-0">{k}</span>
+      <span className="text-ink text-right min-w-0 break-words">{v}</span>
+    </div>
+  );
+
+const DetailBlock: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
+  <div>
+    <div className="text-[11px] font-semibold uppercase tracking-wider text-faint mb-1">{title}</div>
+    <div className="divide-y divide-line">{children}</div>
+  </div>
+);
+
+/** Pop-up with everything about one fund line: the payment, and the booking / voucher purchase / settlement it belongs to. */
+const EntryDetails: React.FC<{
+  e: FundEntry;
+  en: boolean;
+  fundName: (f: Fund) => string;
+  slipNo?: string;
+  onClose: () => void;
+  onPrint?: () => void;
+  onVoid?: () => void;
+}> = ({ e, en, fundName, slipNo, onClose, onPrint, onVoid }) => {
+  const t = e.txn;
+  const ref = t ? t.reference : e.pay?.reference;
+  const remarks = t ? t.remarks : e.pay?.remarks;
+  const f = e.res ? folioOf(e.res) : e.vs ? voucherTotals(e.vs) : null;
+  const totals = f && (
+    <>
+      <DetailRow k={en ? 'Bill total' : '청구 합계'} v={<span className="num">{peso(f.total)}</span>} />
+      <DetailRow k={en ? 'Paid' : '결제액'} v={<span className="num text-ok">{peso(f.paid)}</span>} />
+      <DetailRow k={en ? 'Balance' : '잔액'} v={<span className={`num ${f.balance > 0 ? 'text-bad' : 'text-muted'}`}>{peso(Math.max(f.balance, 0))}</span>} />
+    </>
+  );
+  return (
+    <Dialog title={e.who ? `${e.label} · ${e.who}` : e.label} subtitle={formatLongDate(e.date)} onClose={onClose} width="max-w-md">
+      <div className="px-6 py-5 grid gap-5 max-h-[70vh] overflow-y-auto">
+        <div className={`rounded-xl px-4 py-3 flex items-center justify-between ${e.dir === 'in' ? 'bg-ok-soft' : 'bg-bad-soft'}`}>
+          <div>
+            <div className="text-[11.5px] text-muted">{e.dir === 'in' ? (en ? 'Money in' : '입금') : en ? 'Money out' : '출금'}</div>
+            <div className={`num text-[22px] font-semibold leading-tight ${e.voided ? 'line-through text-muted' : e.dir === 'in' ? 'text-ok' : 'text-bad'}`}>
+              {e.dir === 'in' ? '+' : '−'}
+              {peso(e.amount)}
+            </div>
+          </div>
+          <div className="flex flex-col items-end gap-1">
+            <span className={`badge ${e.fund === 'room' ? 'badge-info' : 'badge-warn'}`}>{fundName(e.fund)}</span>
+            {e.voided && <span className="badge badge-bad">{en ? 'Voided' : '취소됨'}</span>}
+          </div>
+        </div>
+
+        <DetailBlock title={en ? 'Payment' : '결제'}>
+          <DetailRow k={en ? 'Date' : '날짜'} v={formatLongDate(e.date)} />
+          <DetailRow k={en ? 'Recorded' : '기록 시각'} v={e.at && `${formatLongDate(e.at.slice(0, 10))} · ${timeOf(e.at)}`} />
+          <DetailRow k={en ? 'Method' : '방법'} v={e.method} />
+          <DetailRow k={en ? 'Reference' : '참조 번호'} v={fmtRef(ref)} />
+          <DetailRow k={en ? 'Slip no.' : '전표 번호'} v={slipNo} />
+          {t && t.type === 'out' && <DetailRow k={en ? 'Purpose' : '용도'} v={purposeLabel(t.purpose, en)} />}
+          <DetailRow k={en ? 'Released by' : '지급자'} v={t?.releasedBy} />
+          <DetailRow k={en ? 'Received by' : '수령자'} v={t?.receivedBy} />
+          <DetailRow k={en ? 'Settlement month' : '정산 월'} v={e.month && formatMonth(e.month)} />
+          <DetailRow k="OIC" v={e.pay?.oic} />
+          <DetailRow k={en ? 'Remarks' : '비고'} v={remarks} />
+          {e.voided && <DetailRow k={en ? 'Void reason' : '취소 사유'} v={<span className="text-bad">{t?.voidReason || '—'}</span>} />}
+        </DetailBlock>
+
+        {e.res && (
+          <DetailBlock title={en ? 'Booking' : '예약'}>
+            <DetailRow k={en ? 'Guest' : '손님'} v={<b>{e.res.guestName}</b>} />
+            <DetailRow k={en ? 'Agent' : '에이전트'} v={e.res.agentName} />
+            <DetailRow k={en ? 'Confirmation no.' : '확인 번호'} v={e.res.confirmationNo} />
+            <DetailRow k={en ? 'Room' : '객실'} v={e.res.roomType} />
+            <DetailRow k={en ? 'Stay' : '숙박'} v={`${formatDateRange(e.res.checkIn, e.res.checkOut)} · ${nightsLabel(e.res.nights, en)}`} />
+            {totals}
+          </DetailBlock>
+        )}
+
+        {e.vs && (
+          <DetailBlock title={en ? 'Voucher purchase' : '바우처 구매'}>
+            <DetailRow k={en ? 'Guest' : '손님'} v={<b>{e.vs.guestName}</b>} />
+            <DetailRow k={en ? 'Agent' : '에이전트'} v={e.vs.agentName} />
+            <DetailRow k={en ? 'Purchase date' : '구매일'} v={formatLongDate(e.vs.date)} />
+            {e.vs.items.map((c) => (
+              <DetailRow key={c.id} k={`${c.description} × ${c.qty}`} v={<span className="num">{c.free ? (en ? 'Free' : '무료') : peso(chargeAmount(c))}</span>} />
+            ))}
+            {totals}
+          </DetailBlock>
+        )}
+      </div>
+      <div className="px-6 py-4 border-t border-line bg-sunken flex justify-end gap-2">
+        {onVoid && (
+          <button onClick={onVoid} className="btn btn-outline !text-bad">
+            <Ban className="w-4 h-4" />
+            {en ? 'Void' : '취소'}
+          </button>
+        )}
+        {onPrint && (
+          <button onClick={onPrint} className="btn btn-outline">
+            <Printer className="w-4 h-4" />
+            {en ? 'Print slip' : '전표 인쇄'}
+          </button>
+        )}
+        <button onClick={onClose} className="btn btn-primary">
+          {en ? 'Close' : '닫기'}
+        </button>
+      </div>
+    </Dialog>
   );
 };
 
@@ -518,6 +753,7 @@ const FundForm: React.FC<{
       remarks: remarks.trim(),
       voided: false,
       voidReason: '',
+      createdAt: nowStamp(),
     });
   };
 

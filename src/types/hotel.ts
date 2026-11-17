@@ -66,6 +66,8 @@ export interface FolioPayment {
   /** Person in charge who handled the payment (payments to the hotel). */
   oic?: string;
   remarks?: string;
+  /** when the payment was recorded, 'YYYY-MM-DD HH:MM:SS' (set when added; saved as RECORDED_AT) */
+  recordedAt?: string;
 }
 
 /**
@@ -113,6 +115,8 @@ export interface FundTxn {
   remarks: string;
   voided: boolean;
   voidReason: string;
+  /** when it was recorded, 'YYYY-MM-DD HH:MM:SS' (CREATED_DT on the server) */
+  createdAt?: string;
 }
 
 /** Agents file maintenance (table `agents`). */

@@ -1,11 +1,12 @@
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDownLeft, ArrowUpRight, Ban, Banknote, FileSpreadsheet, Landmark, Minus, PiggyBank, Plus, Printer, Search, Ticket, Wallet } from 'lucide-react';
-import { FolioPayment, FundTxn, PaymentMethod, Reservation, Settlement, VoucherSale } from '../types/hotel';
+import { ArrowDownLeft, ArrowUpRight, Ban, Banknote, Check, FileSpreadsheet, Landmark, Minus, PiggyBank, Plus, Printer, Search, Ticket, Wallet } from 'lucide-react';
+import { CasinoRatesConfig, FolioPayment, FundTxn, PaymentMethod, Reservation, Settlement, VoucherSale } from '../types/hotel';
 import { chargeAmount, escapeHtml as esc, folioOf, peso, nowStamp, printDocument, todayISO, uid, voucherTotals } from '../utils/billing';
 import { formatDateRange, formatLongDate, formatMonth, formatShortDate, getDaysInMonth, nightsLabel } from '../utils/hotelHelpers';
 import { Language } from '../i18n/translations';
 import { ComboInput, Dialog, PageHeader, Pager, Select, toast } from './ui';
 import { DateFilter } from './DateFilter';
+import { GuestFolio } from './GuestFolio';
 
 type Fund = 'room' | 'voucher';
 type Kind = 'guest' | 'voucher' | 'hotel' | 'cashout' | 'opening';
@@ -178,7 +179,9 @@ export const FundPage: React.FC<{
   selectedMonth: string;
   setSelectedMonth: (m: string) => void;
   language: Language;
-}> = ({ reservations, voucherSales, settlements, fundTxns, setFundTxns, selectedMonth, setSelectedMonth, language }) => {
+  /** for the room payment pop-up (the guest's billing, read-only) */
+  casinoRates: CasinoRatesConfig;
+}> = ({ reservations, voucherSales, settlements, fundTxns, setFundTxns, selectedMonth, setSelectedMonth, language, casinoRates }) => {
   const en = language === 'en';
   const [fundView, setFundView] = useState<'all' | Fund>('all');
   // Date / Date Range filter (same as the other pages); the range starts as the selected month
@@ -571,6 +574,18 @@ export const FundPage: React.FC<{
       )}
 
       {detail && (
+        detail.res ? (
+          // room payment: the guest's billing pop-up, view only, with this payment highlighted
+          <GuestFolio
+            readOnly
+            reservation={detail.res}
+            highlightPaymentId={detail.pay?.id}
+            casinoRates={casinoRates}
+            en={en}
+            onChange={() => {}}
+            onClose={() => setDetail(null)}
+          />
+        ) : (
         <EntryDetails
           e={detail}
           en={en}
@@ -587,6 +602,7 @@ export const FundPage: React.FC<{
               : undefined
           }
         />
+        )
       )}
 
       {voiding && (
@@ -605,23 +621,25 @@ export const FundPage: React.FC<{
   );
 };
 
-/** One label / value pair in the details grid; hidden when there is no value. */
-const Field: React.FC<{ k: string; v?: React.ReactNode; wide?: boolean }> = ({ k, v, wide }) =>
-  v === undefined || v === null || v === '' ? null : (
-    <div className={`min-w-0 ${wide ? 'col-span-2' : ''}`}>
-      <div className="text-[11px] text-muted">{k}</div>
-      <div className="text-[13px] text-ink mt-0.5 break-words">{v}</div>
+/** First section of the card: a two-column grid, small label above each value; empty values are left out. */
+const DetailsTable: React.FC<{ title: string; items: { k: string; v?: React.ReactNode }[] }> = ({ title, items }) => {
+  const shown = items.filter((it) => it.v !== undefined && it.v !== null && it.v !== '');
+  return (
+    <div className="pb-3">
+      <div className="px-4 pt-3 pb-2 text-[10.5px] font-semibold uppercase tracking-wider text-faint">{title}</div>
+      <div className="px-4 grid grid-cols-2 gap-x-6 gap-y-3">
+        {shown.map((it) => (
+          <div key={it.k} className="min-w-0">
+            <div className="text-[11px] text-muted">{it.k}</div>
+            <div className="text-[13.5px] font-medium text-ink mt-0.5 break-words">{it.v}</div>
+          </div>
+        ))}
+      </div>
     </div>
   );
+};
 
-const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
-  <section>
-    <div className="text-[11px] font-semibold uppercase tracking-wider text-faint mb-2">{title}</div>
-    {children}
-  </section>
-);
-
-/** Pop-up with everything about one fund line: the payment, and the booking / voucher purchase / settlement it belongs to. */
+/** Pop-up with the details of one fund line: one card with the booking details, charges, payments and balance. */
 const EntryDetails: React.FC<{
   e: FundEntry;
   en: boolean;
@@ -632,113 +650,150 @@ const EntryDetails: React.FC<{
   onVoid?: () => void;
 }> = ({ e, en, fundName, slipNo, onClose, onPrint, onVoid }) => {
   const t = e.txn;
-  const ref = t ? t.reference : e.pay?.reference;
+  const ref = refOf({ reference: t ? t.reference : e.pay?.reference, amount: e.amount });
   const remarks = t ? t.remarks : e.pay?.remarks;
   const f = e.res ? folioOf(e.res) : e.vs ? voucherTotals(e.vs) : null;
   const guest = e.res?.guestName ?? e.vs?.guestName;
   const agent = e.res?.agentName ?? e.vs?.agentName;
   const isIn = e.dir === 'in';
+  // billing lines with their dates: room charge + extras (booking) or the vouchers bought (voucher purchase)
+  const bill: { date: string; desc: string; qty: string; amount: React.ReactNode }[] = e.res
+    ? [
+        { date: '', desc: en ? 'Room charge' : '객실 요금', qty: '', amount: peso(e.res.amount) },
+        ...(e.res.charges || []).map((c) => ({
+          date: formatShortDate(c.date),
+          desc: c.description,
+          qty: `× ${c.qty}`,
+          amount: c.free ? (en ? 'Free' : '무료') : peso(chargeAmount(c)),
+        })),
+      ]
+    : e.vs
+      ? e.vs.items.map((c) => ({
+          date: '',
+          desc: c.description,
+          qty: `× ${c.qty}`,
+          amount: c.free ? (en ? 'Free' : '무료') : peso(chargeAmount(c)),
+        }))
+      : [];
+  // every payment on that bill, oldest first, with when it was recorded
+  const payments = [...((e.res ? e.res.payments : e.vs?.payments) || [])].sort((a, b) =>
+    `${a.date}${a.recordedAt || ''}`.localeCompare(`${b.date}${b.recordedAt || ''}`)
+  );
 
   return (
-    <Dialog
-      title={e.label}
-      subtitle={guest ? [agent, guest].filter(Boolean).join(' · ') : formatLongDate(e.date)}
-      onClose={onClose}
-      width="max-w-lg"
-    >
-      <div className="px-6 py-5 grid gap-5 max-h-[70vh] overflow-y-auto">
-        {/* amount + where the money went */}
-        <div className={`rounded-xl px-4 py-3.5 flex items-center justify-between gap-4 border ${isIn ? 'bg-ok-soft border-ok-line' : 'bg-bad-soft border-bad-line'}`}>
-          <div>
-            <div className="text-[11.5px] text-muted">{isIn ? (en ? 'Money in' : '입금') : en ? 'Money out' : '출금'}</div>
-            <div className={`num text-[24px] font-semibold leading-tight ${e.voided ? 'line-through text-muted' : isIn ? 'text-ok' : 'text-bad'}`}>
-              {isIn ? '+' : '−'}
-              {peso(e.amount)}
-            </div>
+    <Dialog title={e.label} subtitle={`${formatLongDate(e.date)}${e.at ? ` · ${timeOf(e.at)}` : ''}`} onClose={onClose} width="max-w-md">
+      <div className="max-h-[calc(93vh-170px)] overflow-y-auto">
+        {/* amount — only for cash in / cash out; a guest payment shows it in the Payments list below */}
+        {!f && (
+        <div className="px-6 pt-4 pb-0 flex items-end justify-between gap-4">
+          <div className={`num text-[24px] font-semibold leading-none ${e.voided ? 'line-through text-muted' : isIn ? 'text-ok' : 'text-bad'}`}>
+            {isIn ? '+' : '−'}
+            {peso(e.amount)}
           </div>
-          <div className="flex flex-col items-end gap-1.5 text-right">
-            <div className="flex items-center gap-1.5">
-              <span className={`badge ${e.fund === 'room' ? 'badge-info' : 'badge-warn'}`}>{fundName(e.fund)}</span>
-              {e.voided && <span className="badge badge-bad">{en ? 'Voided' : '취소됨'}</span>}
-            </div>
-            <div className="text-[12px] text-ink-2">
-              {e.method}
-              {e.at && <span className="text-muted"> · {timeOf(e.at)}</span>}
-            </div>
+          {e.voided && <div className="text-[12px] text-bad font-medium text-right">{en ? 'Voided' : '취소됨'}</div>}
+        </div>
+        )}
+
+        {/* one card: details, then charges / payments / status */}
+        <div className="px-6 py-4">
+          <div className="rounded-xl border border-line overflow-hidden">
+            <DetailsTable
+              title={e.res ? (en ? 'Booking' : '예약') : e.vs ? (en ? 'Voucher purchase' : '바우처 구매') : en ? 'Details' : '상세'}
+              items={[
+                ...(guest
+                  ? [
+                      { k: en ? 'Agent' : '에이전트', v: agent?.trim() ? agent : '-' },
+                      { k: en ? 'Guest' : '손님', v: guest },
+                    ]
+                  : []),
+                ...(e.res
+                  ? [
+                      { k: en ? 'Stay' : '숙박', v: formatDateRange(e.res.checkIn, e.res.checkOut) },
+                      { k: en ? 'Nights' : '박수', v: nightsLabel(e.res.nights, en) },
+                      { k: en ? 'Room type' : '객실 타입', v: e.res.roomType },
+                      { k: en ? 'Confirmation no.' : '확인 번호', v: e.res.confirmationNo },
+                    ]
+                  : []),
+                ...(e.vs && e.vs.date !== e.date ? [{ k: en ? 'Purchased' : '구매일', v: formatLongDate(e.vs.date) }] : []),
+                ...(f ? [] : [{ k: en ? 'Payment' : '결제', v: `${e.method} · ${fundName(e.fund)} ${en ? 'fund' : '자금'}` }]),
+                { k: en ? 'Reference' : '참조 번호', v: ref },
+                { k: en ? 'Slip no.' : '전표 번호', v: slipNo },
+                ...(t && t.type === 'out' ? [{ k: en ? 'Purpose' : '용도', v: purposeLabel(t.purpose, en) }] : []),
+                { k: en ? 'Released by' : '지급자', v: t?.releasedBy },
+                { k: en ? 'Received by' : '수령자', v: t?.receivedBy },
+                { k: en ? 'Settlement month' : '정산 월', v: e.month && formatMonth(e.month) },
+                { k: 'OIC', v: e.pay?.oic },
+                { k: en ? 'Remarks' : '비고', v: remarks },
+                ...(e.voided ? [{ k: en ? 'Void reason' : '취소 사유', v: <span className="text-bad">{t?.voidReason || '—'}</span> }] : []),
+              ]}
+            />
+
+          {f && (
+            <>
+                {/* charges */}
+                <div className="px-4 pt-3 pb-1 text-[10.5px] font-semibold uppercase tracking-wider text-faint border-t border-line">{en ? 'Charges' : '청구 내역'}</div>
+                {bill.map((b, i) => (
+                  <div key={i} className="px-4 py-2 flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="text-[13.5px] font-medium text-ink truncate">{b.desc}</div>
+                      {(b.date || b.qty) && <div className="text-[11.5px] text-muted">{[b.date, b.qty].filter(Boolean).join(' · ')}</div>}
+                    </div>
+                    <div className="num text-[13.5px] text-ink whitespace-nowrap">{b.amount}</div>
+                  </div>
+                ))}
+                {bill.length > 1 && (
+                  <div className="mx-4 py-2 border-t border-line flex items-center justify-between text-[13.5px]">
+                    <span className="font-semibold text-ink">{en ? 'Total' : '합계'}</span>
+                    <span className="num font-semibold text-ink">{peso(f.total)}</span>
+                  </div>
+                )}
+
+                {/* payments */}
+                <div className="px-4 pt-3 pb-1 text-[10.5px] font-semibold uppercase tracking-wider text-faint border-t border-line">
+                  {en ? 'Payments' : '결제 내역'}
+                </div>
+                {payments.length === 0 && <div className="px-4 py-2 text-[12.5px] text-muted">{en ? 'No payments yet' : '결제 내역 없음'}</div>}
+                {payments.map((p) => {
+                  const current = p.id === e.pay?.id;
+                  const pref = refOf(p);
+                  return (
+                    <div key={p.id} className="px-4 py-2 flex items-center justify-between gap-4">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="w-7 h-7 shrink-0 rounded-full bg-ok-soft text-ok grid place-items-center">
+                          <Check className="w-3.5 h-3.5" strokeWidth={2.5} />
+                        </span>
+                        <div className="min-w-0">
+                          <div className="text-[13.5px] font-medium text-ink flex items-center gap-2">
+                            <span className="truncate">
+                              {p.method} {en ? 'payment' : '결제'}
+                              {pref && <span className="font-normal text-muted"> · {pref}</span>}
+                            </span>
+                            {current && <span className="badge badge-ok !h-5 !text-[10.5px] shrink-0">{en ? 'this payment' : '이 결제'}</span>}
+                          </div>
+                          <div className="text-[11.5px] text-muted">
+                            {formatShortDate(p.date)}
+                            {p.recordedAt && ` · ${timeOf(p.recordedAt)}`}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="num text-[13.5px] text-ok whitespace-nowrap">−{peso(p.amount)}</div>
+                    </div>
+                  );
+                })}
+
+                {/* status */}
+                <div className={`mt-1 px-4 py-3 flex items-center justify-between ${f.balance > 0 ? 'bg-bad-soft' : 'bg-ok-soft'}`}>
+                  <div className={`text-[13.5px] font-semibold ${f.balance > 0 ? 'text-bad' : 'text-ok'}`}>
+                    {f.balance > 0 ? (en ? 'Balance due' : '잔액') : en ? 'Fully paid' : '결제 완료'}
+                  </div>
+                  <div className={`num text-[18px] font-semibold ${f.balance > 0 ? 'text-bad' : 'text-ok'}`}>{peso(Math.max(f.balance, 0))}</div>
+                </div>
+            </>
+          )}
           </div>
         </div>
-
-        <Section title={en ? 'Payment' : '결제'}>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-3">
-            <Field k={en ? 'Date' : '날짜'} v={formatLongDate(e.date)} />
-            <Field k={en ? 'Recorded' : '기록 시각'} v={e.at && `${formatLongDate(e.at.slice(0, 10))} · ${timeOf(e.at)}`} />
-            <Field k={en ? 'Method' : '방법'} v={e.method} />
-            <Field k={en ? 'Reference' : '참조 번호'} v={refOf({ reference: ref, amount: e.amount })} />
-            <Field k={en ? 'Slip no.' : '전표 번호'} v={slipNo} />
-            {t && t.type === 'out' && <Field k={en ? 'Purpose' : '용도'} v={purposeLabel(t.purpose, en)} />}
-            <Field k={en ? 'Released by' : '지급자'} v={t?.releasedBy} />
-            <Field k={en ? 'Received by' : '수령자'} v={t?.receivedBy} />
-            <Field k={en ? 'Settlement month' : '정산 월'} v={e.month && formatMonth(e.month)} />
-            <Field k="OIC" v={e.pay?.oic} />
-            <Field k={en ? 'Remarks' : '비고'} v={remarks} wide />
-            {e.voided && <Field k={en ? 'Void reason' : '취소 사유'} v={<span className="text-bad">{t?.voidReason || '—'}</span>} wide />}
-          </div>
-        </Section>
-
-        {e.res && (
-          <Section title={en ? 'Booking' : '예약'}>
-            <div className="grid grid-cols-2 gap-x-6 gap-y-3">
-              <Field k={en ? 'Guest' : '손님'} v={<b>{e.res.guestName}</b>} />
-              <Field k={en ? 'Agent' : '에이전트'} v={e.res.agentName} />
-              <Field k={en ? 'Confirmation no.' : '확인 번호'} v={e.res.confirmationNo} />
-              <Field k={en ? 'Room' : '객실'} v={e.res.roomType} />
-              <Field k={en ? 'Stay' : '숙박'} v={`${formatDateRange(e.res.checkIn, e.res.checkOut)} · ${nightsLabel(e.res.nights, en)}`} wide />
-            </div>
-          </Section>
-        )}
-
-        {e.vs && (
-          <Section title={en ? 'Voucher purchase' : '바우처 구매'}>
-            <div className="grid grid-cols-2 gap-x-6 gap-y-3">
-              <Field k={en ? 'Guest' : '손님'} v={<b>{e.vs.guestName}</b>} />
-              <Field k={en ? 'Agent' : '에이전트'} v={e.vs.agentName} />
-              <Field k={en ? 'Purchase date' : '구매일'} v={formatLongDate(e.vs.date)} />
-            </div>
-            <div className="mt-3 rounded-xl border border-line overflow-hidden">
-              <table className="dtable compact">
-                <tbody>
-                  {e.vs.items.map((c) => (
-                    <tr key={c.id}>
-                      <td className="text-ink">{c.description}</td>
-                      <td className="c num text-muted whitespace-nowrap">× {c.qty}</td>
-                      <td className="r num font-medium text-ink whitespace-nowrap">{c.free ? (en ? 'Free' : '무료') : peso(chargeAmount(c))}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Section>
-        )}
-
-        {/* the guest's bill this payment belongs to */}
-        {f && (
-          <div className="grid grid-cols-3 gap-2">
-            <div className="rounded-xl border border-line bg-sunken px-3 py-2.5">
-              <div className="text-[11px] text-muted">{en ? 'Bill total' : '청구 합계'}</div>
-              <div className="num text-[15px] font-semibold text-ink mt-0.5">{peso(f.total)}</div>
-            </div>
-            <div className="rounded-xl border border-ok-line bg-ok-soft px-3 py-2.5">
-              <div className="text-[11px] text-muted">{en ? 'Paid' : '결제액'}</div>
-              <div className="num text-[15px] font-semibold text-ok mt-0.5">{peso(f.paid)}</div>
-            </div>
-            <div className={`rounded-xl border px-3 py-2.5 ${f.balance > 0 ? 'border-bad-line bg-bad-soft' : 'border-line bg-sunken'}`}>
-              <div className="text-[11px] text-muted">{en ? 'Balance' : '잔액'}</div>
-              <div className={`num text-[15px] font-semibold mt-0.5 ${f.balance > 0 ? 'text-bad' : 'text-muted'}`}>{peso(Math.max(f.balance, 0))}</div>
-            </div>
-          </div>
-        )}
       </div>
-      <div className="px-6 py-4 border-t border-line bg-sunken flex justify-end gap-2">
+      <div className="px-6 py-4 border-t border-line flex justify-end gap-2">
         {onVoid && (
           <button onClick={onVoid} className="btn btn-outline !text-bad">
             <Ban className="w-4 h-4" />

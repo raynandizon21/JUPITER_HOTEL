@@ -326,9 +326,9 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
               </span>
               {en ? 'Guest Balances' : '손님 미수금'}
             </h3>
-            <p className="text-[12.5px] text-muted mt-0.5">{en ? 'Guests who still owe on their folio' : '청구서 잔액이 남은 손님'}</p>
+            <p className="text-[12.5px] text-muted mt-0.5">{en ? 'Guests who still owe on their bill' : '청구서 잔액이 남은 손님'}</p>
             <div className="mt-3 space-y-2 overflow-y-auto max-h-[240px]">
-              {s.guestOwing.length === 0 && <Empty ok text={en ? 'All guest folios are paid' : '모든 손님 청구서 결제 완료'} />}
+              {s.guestOwing.length === 0 && <Empty ok text={en ? 'All guest bills are paid' : '모든 손님 청구서 결제 완료'} />}
               {s.guestOwing.map((r) => (
                 <button key={r.id} onClick={() => setFolioId(r.id)} className="w-full text-left rounded-xl border border-line p-3 flex items-center gap-3 hover:bg-sunken cursor-pointer">
                   <div className="flex-1 min-w-0">

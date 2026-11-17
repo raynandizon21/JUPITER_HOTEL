@@ -470,6 +470,7 @@ export default function App() {
 
             {activeModule === 'fund' && (
               <FundPage
+                casinoRates={casinoRates}
                 reservations={reservations}
                 voucherSales={voucherSales}
                 settlements={settlements}

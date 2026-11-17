@@ -12,6 +12,10 @@ interface Props {
   en: boolean;
   onChange: (r: Reservation) => void;
   onClose: () => void;
+  /** View only (e.g. opened from the Fund ledger): no add / edit / remove controls. */
+  readOnly?: boolean;
+  /** Payment to highlight (the one clicked in the Fund ledger). */
+  highlightPaymentId?: string;
 }
 
 const statusBadge = (status: 'paid' | 'partial' | 'unpaid', en: boolean) =>
@@ -23,7 +27,8 @@ const statusBadge = (status: 'paid' | 'partial' | 'unpaid', en: boolean) =>
     <span className="badge badge-bad badge-dot">{en ? 'Unpaid' : '미결제'}</span>
   );
 
-export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, onChange, onClose }) => {
+export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, onChange, onClose, readOnly = false, highlightPaymentId }) => {
+  const cols = readOnly ? 3 : 4; // charges table columns (the last one holds edit / remove buttons)
   const f = folioOf(r);
   const charges = r.charges || [];
   const payments = r.payments || [];
@@ -127,7 +132,7 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
     const nf = folioOf(next);
     toast(
       en ? 'Payment recorded' : '결제 기록됨',
-      `${peso(p.amount)} · ${p.method} — ${nf.balance <= 0 ? (en ? 'folio fully paid' : '전액 결제 완료') : `${en ? 'balance' : '잔액'} ${peso(nf.balance)}`}`
+      `${peso(p.amount)} · ${p.method} — ${nf.balance <= 0 ? (en ? 'bill fully paid' : '전액 결제 완료') : `${en ? 'balance' : '잔액'} ${peso(nf.balance)}`}`
     );
   };
 
@@ -145,8 +150,8 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
       .map((p) => `<tr><td>${formatLongDate(p.date)}</td><td>${esc(p.method)}</td><td>${esc(p.reference || '—')}</td><td class="r">${peso(p.amount)}</td></tr>`)
       .join('');
     printDocument(
-      `Guest Folio - ${r.guestName}`,
-      `<div class="row"><div><h1>Hilton Hotel — Guest Folio</h1><div class="muted">Folio #${esc(r.id)}</div></div>
+      `Guest Bill - ${r.guestName}`,
+      `<div class="row"><div><h1>Hilton Hotel — Guest Bill</h1><div class="muted">Bill #${esc(r.id)}</div></div>
        <div style="text-align:right"><b>${esc(r.guestName)}</b><div class="muted">${esc(r.roomType)}</div>
        <div class="muted">${formatDateRange(r.checkIn, r.checkOut)} · ${r.nights} night(s)</div></div></div>
        <h2>Charges</h2><table><thead><tr><th>Date</th><th>Description</th><th class="r">Qty</th><th class="r">Unit price</th><th class="r">Amount</th></tr></thead><tbody>${rows}</tbody></table>
@@ -166,7 +171,7 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
           {r.guestName} {statusBadge(f.status, en)}
         </span>
       }
-      subtitle={`${r.roomType} · ${r.occupancy === 'triple' ? (en ? 'Triple' : '3인') : en ? 'Single / Double' : '1~2인'}`}
+      subtitle={`${en ? 'Agent' : '에이전트'} · ${r.agentName?.trim() || '-'} · ${r.roomType} · ${r.occupancy === 'triple' ? (en ? 'Triple' : '3인') : en ? 'Single / Double' : '1~2인'}`}
     >
       <div className="px-6 py-5 space-y-5 max-h-[70vh] overflow-y-auto">
         {/* Summary */}
@@ -195,7 +200,7 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
                   <th>{en ? 'Item' : '항목'}</th>
                   <th className="r">{en ? 'Qty × Price' : '수량 × 단가'}</th>
                   <th className="r">{en ? 'Amount' : '금액'}</th>
-                  <th className="w-[80px]" />
+                  {!readOnly && <th className="w-[80px]" />}
                 </tr>
               </thead>
               <tbody>
@@ -216,14 +221,14 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
                   </td>
                   <td className="!border-b-0" />
                   <td className="!border-b-0 r num font-semibold text-ink">{peso(r.amount)}</td>
-                  <td className="!border-b-0" />
+                  {!readOnly && <td className="!border-b-0" />}
                 </tr>
                 {nightly.length > 0 && (
                   <tr>
-                    <td colSpan={4} className="!px-0 !pt-0 !pb-3">
+                    <td colSpan={cols} className="!px-0 !pt-0 !pb-3">
                       <div className="fade-band text-[12.5px]">
                         {nightly.map((n, i) => (
-                          <div key={n.date} className="fade-row flex items-center gap-3 pl-[60px] pr-[52px] py-2">
+                          <div key={n.date} className={`fade-row flex items-center gap-3 pl-[60px] ${readOnly ? 'pr-4' : 'pr-[52px]'} py-2`}>
                             <span className="w-5 h-5 rounded-full bg-surface border border-line grid place-items-center text-[10.5px] font-semibold text-muted shrink-0">
                               {i + 1}
                             </span>
@@ -240,7 +245,7 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
                           </div>
                         ))}
                         {r.amount !== nightly.reduce((a, n) => a + n.rate, 0) && (
-                          <div className="fade-row flex items-center gap-3 pl-[60px] pr-[52px] py-2 text-muted">
+                          <div className={`fade-row flex items-center gap-3 pl-[60px] ${readOnly ? 'pr-4' : 'pr-[52px]'} py-2 text-muted`}>
                             <span className="w-5 shrink-0" />
                             <span className="flex-1">{en ? 'Manual adjustment' : '수동 조정'}</span>
                             <span className="num w-[150px] text-right">
@@ -312,7 +317,7 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
                           </div>
                         ) : (
                           <span className="inline-flex items-center gap-3">
-                            <FreeCheck
+                            {!readOnly && <FreeCheck
                               en={en}
                               checked={!!c.free}
                               onChange={() => {
@@ -322,7 +327,7 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
                                   `${c.description} · ${c.free ? peso(c.qty * c.unitPrice) : '₱0'}`
                                 );
                               }}
-                            />
+                            />}
                             {c.qty} × {peso(c.unitPrice)}
                           </span>
                         )}
@@ -330,7 +335,7 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
                       <td className="r num font-semibold text-ink whitespace-nowrap">
                         {editing ? peso(eQty * ePrice) : <ChargeAmountText qty={c.qty} unitPrice={c.unitPrice} free={c.free} />}
                       </td>
-                      <td className="r whitespace-nowrap">
+                      {!readOnly && <td className="r whitespace-nowrap">
                         {editing ? (
                           <>
                             <button onClick={saveEdit} className="icon-btn hover:!text-ok" title={en ? 'Save' : '저장'}>
@@ -357,7 +362,7 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
                             </button>
                           </>
                         )}
-                      </td>
+                      </td>}
                     </tr>
                   );
                 })}
@@ -366,13 +371,14 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
                 <tr>
                   <td colSpan={2}>{en ? 'Total charges' : '총 청구액'}</td>
                   <td className="r num">{peso(f.total)}</td>
-                  <td />
+                  {!readOnly && <td />}
                 </tr>
               </tfoot>
             </table>
           </div>
 
           {/* add charge */}
+          {!readOnly && (
           <div className="mt-2 grid grid-cols-12 gap-2 items-end">
             <div className="col-span-6 sm:col-span-3">
               <label className="field-label">{en ? 'Item' : '항목'}</label>
@@ -416,6 +422,7 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
               </button>
             </div>
           </div>
+          )}
         </section>
 
         {/* Payments */}
@@ -431,22 +438,26 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
                   <th>{en ? 'Method' : '결제 수단'}</th>
                   <th>{en ? 'Reference / OR no.' : '참조 / 영수증 번호'}</th>
                   <th className="r">{en ? 'Amount' : '금액'}</th>
-                  <th className="w-10" />
+                  {!readOnly && <th className="w-10" />}
                 </tr>
               </thead>
               <tbody>
                 {payments.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="!py-6 text-center text-muted">{en ? 'No payments yet' : '결제 내역 없음'}</td>
+                    <td colSpan={readOnly ? 4 : 5} className="!py-6 text-center text-muted">{en ? 'No payments yet' : '결제 내역 없음'}</td>
                   </tr>
                 )}
                 {payments.map((p) => (
-                  <tr key={p.id}>
-                    <td className="whitespace-nowrap">{formatLongDate(p.date)}</td>
+                  <tr key={p.id} className={p.id === highlightPaymentId ? '!bg-ok-soft/60' : ''}>
+                    <td className="whitespace-nowrap">
+                      {formatLongDate(p.date)}
+                      {p.id === highlightPaymentId && <span className="badge badge-ok ml-2 !h-5 !text-[10.5px]">{en ? 'this payment' : '이 결제'}</span>}
+                    </td>
                     <td>{p.method}</td>
-                    <td className="text-muted">{p.reference || '—'}</td>
+                    {/* a reference that is just the amount typed again is not shown */}
+                    <td className="text-muted">{p.reference && Number(p.reference.replace(/,/g, '').trim()) !== p.amount ? p.reference : '—'}</td>
                     <td className="r num font-medium text-ok">{peso(p.amount)}</td>
-                    <td className="r">
+                    {!readOnly && <td className="r">
                       <button
                         onClick={() => setRemovingPay(p)}
                         className="icon-btn hover:!text-bad"
@@ -454,14 +465,14 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
-                    </td>
+                    </td>}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
 
-          {f.balance > 0 && (
+          {f.balance > 0 && !readOnly && (
             <div className="mt-2 grid grid-cols-12 gap-2 items-end">
               <div className="col-span-6 sm:col-span-3">
                 <label className="field-label">{en ? 'Date' : '날짜'}</label>
@@ -501,10 +512,10 @@ export const GuestFolio: React.FC<Props> = ({ reservation: r, casinoRates, en, o
       <div className="px-6 py-4 border-t border-line bg-sunken flex items-center justify-between gap-2">
         <button onClick={printFolio} className="btn btn-outline">
           <Printer className="w-4 h-4" />
-          {en ? 'Print folio' : '청구서 인쇄'}
+          {en ? 'Print bill' : '청구서 인쇄'}
         </button>
         <button onClick={onClose} className="btn btn-primary">
-          {en ? 'Done' : '완료'}
+          {readOnly ? (en ? 'Close' : '닫기') : en ? 'Done' : '완료'}
         </button>
       </div>
       {removingPay && (

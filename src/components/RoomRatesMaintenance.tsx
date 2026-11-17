@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useLayoutEffect, useRef, useState } from 'react';
 import { CasinoRatesConfig, Reservation } from '../types/hotel';
 import { Check, Settings2, X, Utensils, Coffee, BedDouble, Plus, Trash2 } from 'lucide-react';
 import { Language } from '../i18n/translations';
-import { PageHeader, toast } from './ui';
+import { PageHeader, Pager, toast } from './ui';
 
 interface RoomRatesMaintenanceProps {
   casinoRates: CasinoRatesConfig;
@@ -33,7 +33,8 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
   const setRoomName = (index: number, value: string) =>
     setDraft((prev) => prev && { ...prev, rooms: prev.rooms.map((r, i) => (i === index ? { ...r, name: value.toUpperCase() } : r)) });
 
-  const addRoom = () =>
+  const addRoom = () => {
+    setPage(Number.MAX_SAFE_INTEGER); // clamped to the last page, where the new row is
     setDraft(
       (prev) =>
         prev && {
@@ -44,6 +45,7 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
           ],
         }
     );
+  };
 
   // bookings that use a room type (by its saved name) — such a room can't be deleted
   const usedBy = (id: string) => {
@@ -90,6 +92,30 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
   };
 
   const filteredRooms = data.rooms;
+
+  // The rate table fills the card; when the room types don't all fit, it pages instead of scrolling.
+  const areaRef = useRef<HTMLDivElement>(null);
+  const [fit, setFit] = useState(20);
+  const [page, setPage] = useState(0);
+  useLayoutEffect(() => {
+    const el = areaRef.current;
+    if (!el) return;
+    const measure = () => {
+      const head = el.querySelector('thead')?.getBoundingClientRect().height ?? 74;
+      const extra = el.querySelector('tr[data-add-row]')?.getBoundingClientRect().height ?? 0;
+      const rows = Array.from(el.querySelectorAll('tbody tr[data-room-row]'));
+      const row = rows.length ? rows.reduce((a, r) => a + r.getBoundingClientRect().height, 0) / rows.length : 34;
+      const n = Math.max(3, Math.floor((el.clientHeight - head - extra) / row));
+      setFit((prev) => (prev === n ? prev : n));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [editing]);
+  const pages = Math.max(1, Math.ceil(filteredRooms.length / fit));
+  const cur = Math.min(page, pages - 1);
+  const pageRooms = filteredRooms.slice(cur * fit, cur * fit + fit);
   const fieldCls = (big = false) =>
     `num ${big ? 'text-[13.5px]' : 'text-[13px]'} font-medium text-ink rounded-lg border transition focus:outline-none ${
       editing
@@ -98,7 +124,7 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
     }`;
 
   const rateInput = (idx: number, field: RateField, value: number) => (
-    <label className={`flex items-center justify-center gap-1 w-full max-w-[150px] h-9 px-3 focus-within:border-ink focus-within:shadow-[0_0_0_3px_rgb(17_18_20/0.06)] ${fieldCls(true)} ${editing ? 'cursor-text' : ''}`}>
+    <label className={`flex items-center justify-center gap-1 w-full max-w-[150px] h-7 px-3 focus-within:border-ink focus-within:shadow-[0_0_0_3px_rgb(17_18_20/0.06)] ${fieldCls(true)} ${editing ? 'cursor-text' : ''}`}>
       <span className="text-muted font-normal select-none">₱</span>
       <input
         type="text"
@@ -127,7 +153,7 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
   ];
 
   return (
-    <div className="flex flex-col min-h-[calc(100vh-200px)]">
+    <div className="flex-1 flex flex-col">
       <PageHeader
         title={en ? 'Room rates' : '객실 요금표'}
         actions={
@@ -152,11 +178,12 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
         }
       />
 
-      <div className="card overflow-hidden mb-4 flex-1 flex flex-col">
-        <div className="overflow-x-auto flex-1 flex flex-col">
-          <table className="w-full flex-1 min-w-[720px] border-collapse text-[13px]">
+      <div className="card overflow-hidden mb-3 flex-1 min-h-[240px] flex flex-col">
+        <div ref={areaRef} className="flex-1 relative overflow-hidden">
+        <div className="absolute inset-x-0 top-0 overflow-x-auto">
+          <table className="w-full min-w-[720px] border-collapse text-[13px]">
             <thead>
-              <tr className="h-[40px]">
+              <tr className="h-[34px]">
                 <th rowSpan={2} className={`${cell} w-[26%] px-4 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.06em] bg-ink text-white !border-r-white/10`}>
                   {en ? 'Room type' : '객실 타입'}
                 </th>
@@ -166,7 +193,7 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
                   </th>
                 ))}
               </tr>
-              <tr className="h-[34px]">
+              <tr className="h-[28px]">
                 {groups.flatMap((g) =>
                   g.cols.map((f) => (
                     <th key={f} className={`${cell} px-4 py-1.5 text-center text-[11px] font-semibold uppercase tracking-[0.06em] ${g.sub}`}>
@@ -182,11 +209,11 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
                   <td colSpan={5} className="py-12 text-center text-muted">{en ? 'No room types match' : '일치하는 객실 타입이 없습니다'}</td>
                 </tr>
               )}
-              {filteredRooms.map((room) => {
+              {pageRooms.map((room) => {
                 const idx = data.rooms.findIndex((r) => r.id === room.id);
                 return (
-                  <tr key={room.id} className="hover:bg-sunken/60 transition-colors">
-                    <td className={`${cell} px-4 py-1 font-medium text-ink`}>
+                  <tr key={room.id} data-room-row className="hover:bg-sunken/60 transition-colors">
+                    <td className={`${cell} px-4 py-0.5 font-medium text-ink`}>
                       {editing ? (
                         <div className="flex items-center gap-2">
                           <input
@@ -211,7 +238,7 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
                     </td>
                     {groups.flatMap((g) =>
                       g.cols.map((f) => (
-                        <td key={f} className={`${cell} px-4 py-1 text-center`}>
+                        <td key={f} className={`${cell} px-4 py-0.5 text-center`}>
                           <div className="flex justify-center">{rateInput(idx, f, room[f])}</div>
                         </td>
                       ))
@@ -220,8 +247,8 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
                 );
               })}
               {editing && (
-                <tr>
-                  <td colSpan={5} className="px-4 py-2 border-b border-line">
+                <tr data-add-row>
+                  <td colSpan={5} className="px-4 py-1.5 border-b border-line">
                     <button onClick={addRoom} className="btn btn-outline btn-sm">
                       <Plus className="w-3.5 h-3.5" />
                       {en ? 'Add room type' : '객실 타입 추가'}
@@ -232,9 +259,11 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
             </tbody>
           </table>
         </div>
+        </div>
+        {pages > 1 && <Pager page={cur} pages={pages} total={filteredRooms.length} size={fit} onPage={setPage} en={en} unitLabel={en ? 'room types' : '객실 타입'} />}
       </div>
 
-      <div className="card px-5 py-3.5 flex flex-col lg:flex-row lg:items-center gap-3 lg:gap-6">
+      <div className="card px-5 py-2.5 flex flex-col lg:flex-row lg:items-center gap-3 lg:gap-6">
         <div className="shrink-0 lg:w-[150px]">
           <div className="text-[13.5px] font-semibold text-ink">{en ? 'Vouchers & add-ons' : '바우처 & 부가 요금'}</div>
           <div className="text-[11.5px] text-muted">{en ? 'Same rate every day' : '전일 공통 적용'}</div>

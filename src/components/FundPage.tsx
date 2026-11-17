@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDownLeft, ArrowUpRight, Ban, Banknote, FileSpreadsheet, Landmark, Minus, PiggyBank, Plus, Printer, Search, Ticket, Wallet } from 'lucide-react';
 import { FolioPayment, FundTxn, PaymentMethod, Reservation, Settlement, VoucherSale } from '../types/hotel';
 import { chargeAmount, escapeHtml as esc, folioOf, peso, nowStamp, printDocument, todayISO, uid, voucherTotals } from '../utils/billing';
@@ -196,7 +196,24 @@ export const FundPage: React.FC<{
       ? formatMonth(fFrom.slice(0, 7))
       : `${formatShortDate(fFrom)} – ${formatShortDate(fTo)}`;
   const [page, setPage] = useState(0);
-  const [size, setSize] = useState(10);
+  // Rows per page = as many as fit the ledger card (like Daily Settlement), so the page never scrolls.
+  const areaRef = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState(8);
+  useLayoutEffect(() => {
+    const el = areaRef.current;
+    if (!el) return;
+    const measure = () => {
+      const head = el.querySelector('thead')?.getBoundingClientRect().height ?? 40;
+      const rows = Array.from(el.querySelectorAll('tbody tr'));
+      const row = rows.length ? rows.reduce((a, r) => a + r.getBoundingClientRect().height, 0) / rows.length : 51;
+      const n = Math.max(3, Math.floor((el.clientHeight - head) / row));
+      setSize((prev) => (prev === n ? prev : n));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const [search, setSearch] = useState('');
   const [form, setForm] = useState<null | 'out' | 'opening'>(null);
   const [voiding, setVoiding] = useState<FundTxn | null>(null);
@@ -286,7 +303,7 @@ export const FundPage: React.FC<{
   const fundName = (f: Fund) => (f === 'room' ? (en ? 'Room' : '객실') : en ? 'Voucher' : '바우처');
 
   return (
-    <div>
+    <div className="flex-1 flex flex-col">
       <PageHeader
         title={en ? 'Fund' : '자금 (펀드)'}
         lede={en ? 'Money collected from room and voucher payments, and what was paid out.' : '객실·바우처 결제로 모인 자금과 출금 내역.'}
@@ -358,7 +375,7 @@ export const FundPage: React.FC<{
         </div>
       </div>
 
-      <div className="card overflow-hidden">
+      <div className="card overflow-hidden flex-1 min-h-[360px] flex flex-col">
         <div className="card-head">
           <div>
             <h3 className="card-title">{en ? 'Fund ledger' : '자금 원장'}</h3>
@@ -403,7 +420,8 @@ export const FundPage: React.FC<{
           </div>
         </div>
 
-        <table className="dtable">
+        <div ref={areaRef} className="flex-1 relative min-h-[200px] overflow-hidden">
+        <table className="dtable absolute inset-x-0 top-0">
           <thead>
             <tr>
               <th>{en ? 'Date / time' : '날짜 / 시간'}</th>
@@ -485,8 +503,9 @@ export const FundPage: React.FC<{
             })}
           </tbody>
         </table>
+        </div>
         {shown.length > 0 && (
-          <Pager page={cur} pages={pages} total={shown.length} size={size} onPage={setPage} onSize={setSize} en={en} unitLabel={en ? 'entries' : '건'} />
+          <Pager page={cur} pages={pages} total={shown.length} size={size} onPage={setPage} en={en} unitLabel={en ? 'entries' : '건'} />
         )}
       </div>
 
@@ -586,19 +605,20 @@ export const FundPage: React.FC<{
   );
 };
 
-const DetailRow: React.FC<{ k: string; v?: React.ReactNode }> = ({ k, v }) =>
+/** One label / value pair in the details grid; hidden when there is no value. */
+const Field: React.FC<{ k: string; v?: React.ReactNode; wide?: boolean }> = ({ k, v, wide }) =>
   v === undefined || v === null || v === '' ? null : (
-    <div className="flex items-baseline justify-between gap-4 py-1.5 text-[13px]">
-      <span className="text-muted shrink-0">{k}</span>
-      <span className="text-ink text-right min-w-0 break-words">{v}</span>
+    <div className={`min-w-0 ${wide ? 'col-span-2' : ''}`}>
+      <div className="text-[11px] text-muted">{k}</div>
+      <div className="text-[13px] text-ink mt-0.5 break-words">{v}</div>
     </div>
   );
 
-const DetailBlock: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
-  <div>
-    <div className="text-[11px] font-semibold uppercase tracking-wider text-faint mb-1">{title}</div>
-    <div className="divide-y divide-line">{children}</div>
-  </div>
+const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
+  <section>
+    <div className="text-[11px] font-semibold uppercase tracking-wider text-faint mb-2">{title}</div>
+    {children}
+  </section>
 );
 
 /** Pop-up with everything about one fund line: the payment, and the booking / voucher purchase / settlement it belongs to. */
@@ -615,66 +635,107 @@ const EntryDetails: React.FC<{
   const ref = t ? t.reference : e.pay?.reference;
   const remarks = t ? t.remarks : e.pay?.remarks;
   const f = e.res ? folioOf(e.res) : e.vs ? voucherTotals(e.vs) : null;
-  const totals = f && (
-    <>
-      <DetailRow k={en ? 'Bill total' : '청구 합계'} v={<span className="num">{peso(f.total)}</span>} />
-      <DetailRow k={en ? 'Paid' : '결제액'} v={<span className="num text-ok">{peso(f.paid)}</span>} />
-      <DetailRow k={en ? 'Balance' : '잔액'} v={<span className={`num ${f.balance > 0 ? 'text-bad' : 'text-muted'}`}>{peso(Math.max(f.balance, 0))}</span>} />
-    </>
-  );
+  const guest = e.res?.guestName ?? e.vs?.guestName;
+  const agent = e.res?.agentName ?? e.vs?.agentName;
+  const isIn = e.dir === 'in';
+
   return (
-    <Dialog title={e.who ? `${e.label} · ${e.who}` : e.label} subtitle={formatLongDate(e.date)} onClose={onClose} width="max-w-md">
+    <Dialog
+      title={e.label}
+      subtitle={guest ? [agent, guest].filter(Boolean).join(' · ') : formatLongDate(e.date)}
+      onClose={onClose}
+      width="max-w-lg"
+    >
       <div className="px-6 py-5 grid gap-5 max-h-[70vh] overflow-y-auto">
-        <div className={`rounded-xl px-4 py-3 flex items-center justify-between ${e.dir === 'in' ? 'bg-ok-soft' : 'bg-bad-soft'}`}>
+        {/* amount + where the money went */}
+        <div className={`rounded-xl px-4 py-3.5 flex items-center justify-between gap-4 border ${isIn ? 'bg-ok-soft border-ok-line' : 'bg-bad-soft border-bad-line'}`}>
           <div>
-            <div className="text-[11.5px] text-muted">{e.dir === 'in' ? (en ? 'Money in' : '입금') : en ? 'Money out' : '출금'}</div>
-            <div className={`num text-[22px] font-semibold leading-tight ${e.voided ? 'line-through text-muted' : e.dir === 'in' ? 'text-ok' : 'text-bad'}`}>
-              {e.dir === 'in' ? '+' : '−'}
+            <div className="text-[11.5px] text-muted">{isIn ? (en ? 'Money in' : '입금') : en ? 'Money out' : '출금'}</div>
+            <div className={`num text-[24px] font-semibold leading-tight ${e.voided ? 'line-through text-muted' : isIn ? 'text-ok' : 'text-bad'}`}>
+              {isIn ? '+' : '−'}
               {peso(e.amount)}
             </div>
           </div>
-          <div className="flex flex-col items-end gap-1">
-            <span className={`badge ${e.fund === 'room' ? 'badge-info' : 'badge-warn'}`}>{fundName(e.fund)}</span>
-            {e.voided && <span className="badge badge-bad">{en ? 'Voided' : '취소됨'}</span>}
+          <div className="flex flex-col items-end gap-1.5 text-right">
+            <div className="flex items-center gap-1.5">
+              <span className={`badge ${e.fund === 'room' ? 'badge-info' : 'badge-warn'}`}>{fundName(e.fund)}</span>
+              {e.voided && <span className="badge badge-bad">{en ? 'Voided' : '취소됨'}</span>}
+            </div>
+            <div className="text-[12px] text-ink-2">
+              {e.method}
+              {e.at && <span className="text-muted"> · {timeOf(e.at)}</span>}
+            </div>
           </div>
         </div>
 
-        <DetailBlock title={en ? 'Payment' : '결제'}>
-          <DetailRow k={en ? 'Date' : '날짜'} v={formatLongDate(e.date)} />
-          <DetailRow k={en ? 'Recorded' : '기록 시각'} v={e.at && `${formatLongDate(e.at.slice(0, 10))} · ${timeOf(e.at)}`} />
-          <DetailRow k={en ? 'Method' : '방법'} v={e.method} />
-          <DetailRow k={en ? 'Reference' : '참조 번호'} v={fmtRef(ref)} />
-          <DetailRow k={en ? 'Slip no.' : '전표 번호'} v={slipNo} />
-          {t && t.type === 'out' && <DetailRow k={en ? 'Purpose' : '용도'} v={purposeLabel(t.purpose, en)} />}
-          <DetailRow k={en ? 'Released by' : '지급자'} v={t?.releasedBy} />
-          <DetailRow k={en ? 'Received by' : '수령자'} v={t?.receivedBy} />
-          <DetailRow k={en ? 'Settlement month' : '정산 월'} v={e.month && formatMonth(e.month)} />
-          <DetailRow k="OIC" v={e.pay?.oic} />
-          <DetailRow k={en ? 'Remarks' : '비고'} v={remarks} />
-          {e.voided && <DetailRow k={en ? 'Void reason' : '취소 사유'} v={<span className="text-bad">{t?.voidReason || '—'}</span>} />}
-        </DetailBlock>
+        <Section title={en ? 'Payment' : '결제'}>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-3">
+            <Field k={en ? 'Date' : '날짜'} v={formatLongDate(e.date)} />
+            <Field k={en ? 'Recorded' : '기록 시각'} v={e.at && `${formatLongDate(e.at.slice(0, 10))} · ${timeOf(e.at)}`} />
+            <Field k={en ? 'Method' : '방법'} v={e.method} />
+            <Field k={en ? 'Reference' : '참조 번호'} v={refOf({ reference: ref, amount: e.amount })} />
+            <Field k={en ? 'Slip no.' : '전표 번호'} v={slipNo} />
+            {t && t.type === 'out' && <Field k={en ? 'Purpose' : '용도'} v={purposeLabel(t.purpose, en)} />}
+            <Field k={en ? 'Released by' : '지급자'} v={t?.releasedBy} />
+            <Field k={en ? 'Received by' : '수령자'} v={t?.receivedBy} />
+            <Field k={en ? 'Settlement month' : '정산 월'} v={e.month && formatMonth(e.month)} />
+            <Field k="OIC" v={e.pay?.oic} />
+            <Field k={en ? 'Remarks' : '비고'} v={remarks} wide />
+            {e.voided && <Field k={en ? 'Void reason' : '취소 사유'} v={<span className="text-bad">{t?.voidReason || '—'}</span>} wide />}
+          </div>
+        </Section>
 
         {e.res && (
-          <DetailBlock title={en ? 'Booking' : '예약'}>
-            <DetailRow k={en ? 'Guest' : '손님'} v={<b>{e.res.guestName}</b>} />
-            <DetailRow k={en ? 'Agent' : '에이전트'} v={e.res.agentName} />
-            <DetailRow k={en ? 'Confirmation no.' : '확인 번호'} v={e.res.confirmationNo} />
-            <DetailRow k={en ? 'Room' : '객실'} v={e.res.roomType} />
-            <DetailRow k={en ? 'Stay' : '숙박'} v={`${formatDateRange(e.res.checkIn, e.res.checkOut)} · ${nightsLabel(e.res.nights, en)}`} />
-            {totals}
-          </DetailBlock>
+          <Section title={en ? 'Booking' : '예약'}>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3">
+              <Field k={en ? 'Guest' : '손님'} v={<b>{e.res.guestName}</b>} />
+              <Field k={en ? 'Agent' : '에이전트'} v={e.res.agentName} />
+              <Field k={en ? 'Confirmation no.' : '확인 번호'} v={e.res.confirmationNo} />
+              <Field k={en ? 'Room' : '객실'} v={e.res.roomType} />
+              <Field k={en ? 'Stay' : '숙박'} v={`${formatDateRange(e.res.checkIn, e.res.checkOut)} · ${nightsLabel(e.res.nights, en)}`} wide />
+            </div>
+          </Section>
         )}
 
         {e.vs && (
-          <DetailBlock title={en ? 'Voucher purchase' : '바우처 구매'}>
-            <DetailRow k={en ? 'Guest' : '손님'} v={<b>{e.vs.guestName}</b>} />
-            <DetailRow k={en ? 'Agent' : '에이전트'} v={e.vs.agentName} />
-            <DetailRow k={en ? 'Purchase date' : '구매일'} v={formatLongDate(e.vs.date)} />
-            {e.vs.items.map((c) => (
-              <DetailRow key={c.id} k={`${c.description} × ${c.qty}`} v={<span className="num">{c.free ? (en ? 'Free' : '무료') : peso(chargeAmount(c))}</span>} />
-            ))}
-            {totals}
-          </DetailBlock>
+          <Section title={en ? 'Voucher purchase' : '바우처 구매'}>
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3">
+              <Field k={en ? 'Guest' : '손님'} v={<b>{e.vs.guestName}</b>} />
+              <Field k={en ? 'Agent' : '에이전트'} v={e.vs.agentName} />
+              <Field k={en ? 'Purchase date' : '구매일'} v={formatLongDate(e.vs.date)} />
+            </div>
+            <div className="mt-3 rounded-xl border border-line overflow-hidden">
+              <table className="dtable compact">
+                <tbody>
+                  {e.vs.items.map((c) => (
+                    <tr key={c.id}>
+                      <td className="text-ink">{c.description}</td>
+                      <td className="c num text-muted whitespace-nowrap">× {c.qty}</td>
+                      <td className="r num font-medium text-ink whitespace-nowrap">{c.free ? (en ? 'Free' : '무료') : peso(chargeAmount(c))}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Section>
+        )}
+
+        {/* the guest's bill this payment belongs to */}
+        {f && (
+          <div className="grid grid-cols-3 gap-2">
+            <div className="rounded-xl border border-line bg-sunken px-3 py-2.5">
+              <div className="text-[11px] text-muted">{en ? 'Bill total' : '청구 합계'}</div>
+              <div className="num text-[15px] font-semibold text-ink mt-0.5">{peso(f.total)}</div>
+            </div>
+            <div className="rounded-xl border border-ok-line bg-ok-soft px-3 py-2.5">
+              <div className="text-[11px] text-muted">{en ? 'Paid' : '결제액'}</div>
+              <div className="num text-[15px] font-semibold text-ok mt-0.5">{peso(f.paid)}</div>
+            </div>
+            <div className={`rounded-xl border px-3 py-2.5 ${f.balance > 0 ? 'border-bad-line bg-bad-soft' : 'border-line bg-sunken'}`}>
+              <div className="text-[11px] text-muted">{en ? 'Balance' : '잔액'}</div>
+              <div className={`num text-[15px] font-semibold mt-0.5 ${f.balance > 0 ? 'text-bad' : 'text-muted'}`}>{peso(Math.max(f.balance, 0))}</div>
+            </div>
+          </div>
         )}
       </div>
       <div className="px-6 py-4 border-t border-line bg-sunken flex justify-end gap-2">

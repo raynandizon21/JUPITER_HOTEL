@@ -356,7 +356,7 @@ export default function App() {
         />
 
         <main className="flex-1 min-w-0 overflow-y-auto rounded-2xl">
-          <div key={activeModule} className="px-2 md:px-4 pt-3 pb-8 animate-fade-in">
+          <div key={activeModule} className="min-h-full flex flex-col px-2 md:px-4 pt-3 pb-4 animate-fade-in">
             {/* Quick actions (in place of the breadcrumb) */}
             <nav className="flex items-center gap-2 mb-4">
               <button

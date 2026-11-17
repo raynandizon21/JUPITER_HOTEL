@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Agent, Holiday, Reservation, CasinoRatesConfig, PaymentStatus, VoucherSale, FolioCharge } from '../types/hotel';
 import { getReferenceMonth, exportToCSV, getNightlyRates, addDays, formatLongDate, formatMonth, formatDateRange, nightsLabel, getStayNights, getDaysInMonth } from '../utils/hotelHelpers';
-import { Plus, Search, Download, Pencil, Trash2, Sparkles, Receipt, Ticket, BedDouble, Settings2 } from 'lucide-react';
+import { Plus, Search, Download, Pencil, Trash2, Sparkles, Receipt, Ticket, BedDouble, Settings2, CircleCheck, CircleX } from 'lucide-react';
 import { GuestFolio, FolioStatusBadge } from './GuestFolio';
 import { folioOf, syncStatus, uid, peso, nowStamp, todayISO, voucherTotals, chargeAmount } from '../utils/billing';
 import { Language, translations } from '../i18n/translations';
@@ -94,6 +94,8 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
   const [formKind, setFormKind] = useState<'room' | 'voucher'>('room');
   const [editingVoucher, setEditingVoucher] = useState<VoucherSale | null>(null);
   const [deletingVoucher, setDeletingVoucher] = useState<VoucherSale | null>(null);
+  // "Mark as paid / unpaid" action on a voucher purchase (asks first)
+  const [payingVoucher, setPayingVoucher] = useState<{ v: VoucherSale; paid: boolean } | null>(null);
   // Ledger tabs: room bookings / voucher-only purchases
   const [tab, setTab] = useState<'rooms' | 'vouchers'>(initialTab ?? 'rooms');
 
@@ -679,6 +681,16 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                     </td>
                     <td className="r">
                       <div className="flex items-center justify-end gap-1.5">
+                        {f.total > 0 &&
+                          (f.balance > 0 ? (
+                            <button onClick={() => setPayingVoucher({ v, paid: true })} className="icon-btn !text-ok hover:!bg-ok-soft" title={en ? 'Mark as paid' : '결제 완료로 표시'}>
+                              <CircleCheck className="w-3.5 h-3.5" />
+                            </button>
+                          ) : (
+                            <button onClick={() => setPayingVoucher({ v, paid: false })} className="icon-btn !text-warn hover:!bg-warn-soft" title={en ? 'Mark as unpaid' : '미결제로 표시'}>
+                              <CircleX className="w-3.5 h-3.5" />
+                            </button>
+                          ))}
                         <button onClick={() => setEditingVoucher(v)} className="icon-btn !text-accent hover:!bg-accent-soft" title={t.edit}>
                           <Pencil className="w-3.5 h-3.5" />
                         </button>
@@ -762,6 +774,46 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
           }}
         />
       )}
+
+      {payingVoucher && (() => {
+        const { v, paid } = payingVoucher;
+        const f = voucherTotals(v);
+        return (
+          <ConfirmDialog
+            danger={!paid}
+            title={paid ? (en ? 'Mark as paid?' : '결제 완료로 표시하시겠습니까?') : en ? 'Mark as unpaid?' : '미결제로 표시하시겠습니까?'}
+            message={
+              <>
+                <b className="text-ink">{v.guestName}</b> · {formatLongDate(v.date)} · {peso(f.total)}
+                <div className="mt-2 text-muted">
+                  {paid
+                    ? en
+                      ? `Records a cash payment of ${peso(f.balance)} today. It goes into the Voucher fund.`
+                      : `오늘 날짜로 현금 ${peso(f.balance)} 결제를 기록합니다. 바우처 자금에 입금됩니다.`
+                    : en
+                      ? `Removes the payments of ${peso(f.paid)} from this purchase. They also come out of the Voucher fund.`
+                      : `이 구매의 결제 ${peso(f.paid)}를 삭제합니다. 바우처 자금에서도 빠집니다.`}
+                </div>
+              </>
+            }
+            confirmLabel={paid ? (en ? 'Mark as paid' : '결제 완료') : en ? 'Mark as unpaid' : '미결제로 표시'}
+            cancelLabel={en ? 'Cancel' : '취소'}
+            onCancel={() => setPayingVoucher(null)}
+            onConfirm={() => {
+              const next: VoucherSale = paid
+                ? { ...v, payments: [...v.payments, { id: uid(), date: todayISO(), amount: f.balance, method: 'Cash', reference: '', recordedAt: nowStamp() }] }
+                : { ...v, payments: [] };
+              setVoucherSales((prev) => prev.map((x) => (x.id === v.id ? next : x)));
+              toast(
+                paid ? (en ? 'Marked as paid' : '결제 완료로 표시됨') : en ? 'Marked as unpaid' : '미결제로 표시됨',
+                `${v.guestName} · ${peso(paid ? f.balance : f.paid)}`,
+                paid ? 'ok' : 'bad'
+              );
+              setPayingVoucher(null);
+            }}
+          />
+        );
+      })()}
 
       {deletingVoucher && (
         <ConfirmDialog

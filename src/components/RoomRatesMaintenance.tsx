@@ -17,6 +17,9 @@ type RateField = 'singleDoubleWeekday' | 'tripleWeekday' | 'singleDoubleWeekend'
 type VoucherField = 'breakfast' | 'dinner' | 'extraBed';
 const toNum = (v: string) => parseInt(v.replace(/[^0-9]/g, ''), 10) || 0;
 
+/** smallest height of a room row (px); rows grow from here to fill the card */
+const MIN_ROW = 33;
+
 export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casinoRates, onSave, reservations, language }) => {
   const en = language === 'en';
   // While editing, changes go to a draft; Save commits, Cancel discards.
@@ -96,6 +99,7 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
   // The rate table fills the card; when the room types don't all fit, it pages instead of scrolling.
   const areaRef = useRef<HTMLDivElement>(null);
   const [fit, setFit] = useState(20);
+  const [avail, setAvail] = useState(0); // height left for the room rows
   const [page, setPage] = useState(0);
   useLayoutEffect(() => {
     const el = areaRef.current;
@@ -103,10 +107,10 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
     const measure = () => {
       const head = el.querySelector('thead')?.getBoundingClientRect().height ?? 74;
       const extra = el.querySelector('tr[data-add-row]')?.getBoundingClientRect().height ?? 0;
-      const rows = Array.from(el.querySelectorAll('tbody tr[data-room-row]'));
-      const row = rows.length ? rows.reduce((a, r) => a + r.getBoundingClientRect().height, 0) / rows.length : 34;
-      const n = Math.max(3, Math.floor((el.clientHeight - head - extra) / row));
+      const space = el.clientHeight - head - extra;
+      const n = Math.max(3, Math.floor(space / MIN_ROW));
       setFit((prev) => (prev === n ? prev : n));
+      setAvail((prev) => (prev === space ? prev : space));
     };
     measure();
     const ro = new ResizeObserver(measure);
@@ -116,6 +120,8 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
   const pages = Math.max(1, Math.ceil(filteredRooms.length / fit));
   const cur = Math.min(page, pages - 1);
   const pageRooms = filteredRooms.slice(cur * fit, cur * fit + fit);
+  // rows grow to fill the card (no blank space under the table); same height on every page
+  const rowH = avail > 0 && pageRooms.length ? Math.max(MIN_ROW, Math.floor(avail / (pages > 1 ? fit : pageRooms.length))) : undefined;
   const fieldCls = (big = false) =>
     `num ${big ? 'text-[13.5px]' : 'text-[13px]'} font-medium text-ink rounded-lg border transition focus:outline-none ${
       editing
@@ -180,7 +186,7 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
 
       <div className="card overflow-hidden mb-3 flex-1 min-h-[240px] flex flex-col">
         <div ref={areaRef} className="flex-1 relative overflow-hidden">
-        <div className="absolute inset-x-0 top-0 overflow-x-auto">
+        <div className="absolute inset-0 overflow-x-auto">
           <table className="w-full min-w-[720px] border-collapse text-[13px]">
             <thead>
               <tr className="h-[34px]">
@@ -212,7 +218,7 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
               {pageRooms.map((room) => {
                 const idx = data.rooms.findIndex((r) => r.id === room.id);
                 return (
-                  <tr key={room.id} data-room-row className="hover:bg-sunken/60 transition-colors">
+                  <tr key={room.id} data-room-row style={{ height: rowH }} className="hover:bg-sunken/60 transition-colors">
                     <td className={`${cell} px-4 py-0.5 font-medium text-ink`}>
                       {editing ? (
                         <div className="flex items-center gap-2">

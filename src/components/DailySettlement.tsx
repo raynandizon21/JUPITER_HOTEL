@@ -270,7 +270,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
         <div className="card-head">
           <div>
             <h3 className="card-title flex items-center gap-2.5">
-              <span className="w-7 h-7 rounded-[8px] bg-accent text-white grid place-items-center">
+              <span className="w-8 h-8 rounded-[10px] grid place-items-center bg-accent-soft text-accent">
                 <CalendarDays className="w-4 h-4" strokeWidth={1.75} />
               </span>
               {en ? 'Daily Settlement' : '일별 정산'}

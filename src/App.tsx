@@ -326,7 +326,6 @@ export default function App() {
             onOpenInventory={() => setActiveModule('inventory')}
             selectedMonth={selectedMonth}
             setSelectedMonth={setSelectedMonth}
-            onNavigateToLedger={() => setActiveModule('ledger')}
             language={language}
           />
         );

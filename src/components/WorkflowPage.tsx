@@ -264,7 +264,7 @@ export const WorkflowPage: React.FC<{
         <Dialog
           title={
             <span className="flex items-center gap-2.5">
-              <span className={`w-8 h-8 rounded-xl grid place-items-center text-white ${steps[openPage].color}`}>
+              <span className={`w-8 h-8 rounded-xl grid place-items-center ${tint(steps[openPage])}`}>
                 {React.createElement(steps[openPage].Icon, { className: 'w-4 h-4' })}
               </span>
               {steps[openPage].page}

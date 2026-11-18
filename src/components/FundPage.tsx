@@ -349,41 +349,55 @@ export const FundPage: React.FC<{
         }
       />
 
-      {/* balances */}
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-4">
-        <BalanceCard Icon={PiggyBank} tone="info" label={en ? 'Room fund' : '객실 자금'} b={room} en={en} />
-        <BalanceCard Icon={Ticket} tone="warn" label={en ? 'Voucher fund' : '바우처 자금'} b={vouch} en={en} />
-        <div className="card p-4 !bg-ok-soft !border-ok-line">
-          <div className="flex items-center gap-2.5 text-[12px] text-ink-2">
-            <span className="w-7 h-7 rounded-[8px] grid place-items-center text-white bg-ok">
-              <Banknote className="w-4 h-4" />
-            </span>
-            {en ? 'Cash on hand (both funds)' : '현금 보유 (전체)'}
-          </div>
-          <div className={`num text-[20px] font-semibold mt-3 leading-none ${cashOnHand < 0 ? 'text-bad' : 'text-ok'}`}>{peso(cashOnHand)}</div>
-          <div className="text-[11.5px] text-muted mt-1.5">{en ? 'Count this against the actual cash' : '실제 현금과 대조하세요'}</div>
-        </div>
-        {/* period cash flow as a small computation: In − Out = Net (green when positive, red when negative) */}
-        <div className="card p-4 flex flex-col">
-          <div className="flex items-center gap-2.5 text-[12px] text-ink-2">
-            <span className="w-7 h-7 rounded-[8px] grid place-items-center text-white bg-ink">
-              <Scale className="w-4 h-4" />
-            </span>
-            {periodLabel}
-          </div>
-          <div className="mt-2.5 grid grid-cols-[1fr_auto] gap-x-3 gap-y-0.5 text-[12px] num">
-            <span className="text-muted font-sans">{en ? 'Money in' : '입금'}</span>
-            <span className="text-right text-ink-2">+{peso(monthIn)}</span>
-            <span className="text-muted font-sans">{en ? 'Money out' : '출금'}</span>
-            <span className="text-right text-ink-2">−{peso(monthOut)}</span>
-            <span className="col-span-2 border-t border-line my-1" />
-            <span className="text-ink font-semibold font-sans">{en ? 'Net' : '순증감'}</span>
-            <span className={`text-right text-[15px] font-semibold leading-none ${monthIn - monthOut < 0 ? 'text-bad' : monthIn - monthOut > 0 ? 'text-ok' : 'text-ink'}`}>
-              {monthIn - monthOut < 0 ? '−' : ''}
-              {peso(Math.abs(monthIn - monthOut))}
-            </span>
-          </div>
-        </div>
+      {/* balances — same card style as the Dashboard cards */}
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
+        <FundCard
+          Icon={PiggyBank}
+          tone="info"
+          label={en ? 'Room fund' : '객실 자금'}
+          value={peso(room.total)}
+          valueClass={room.total < 0 ? 'text-bad' : 'text-info'}
+          rows={[
+            [Banknote, en ? 'Cash' : '현금', room.cash],
+            [Landmark, en ? 'Bank / e-wallet' : '은행·전자', room.other],
+          ]}
+        />
+        <FundCard
+          Icon={Ticket}
+          tone="warn"
+          label={en ? 'Voucher fund' : '바우처 자금'}
+          value={peso(vouch.total)}
+          valueClass={vouch.total < 0 ? 'text-bad' : 'text-warn'}
+          rows={[
+            [Banknote, en ? 'Cash' : '현금', vouch.cash],
+            [Landmark, en ? 'Bank / e-wallet' : '은행·전자', vouch.other],
+          ]}
+        />
+        <FundCard
+          Icon={Banknote}
+          tone="ok"
+          label={en ? 'Cash on hand' : '현금 보유'}
+          note={en ? 'Count this against the actual cash' : '실제 현금과 대조하세요'}
+          value={peso(cashOnHand)}
+          valueClass={cashOnHand < 0 ? 'text-bad' : 'text-ok'}
+          rows={[
+            [PiggyBank, en ? 'Room fund cash' : '객실 자금 현금', room.cash],
+            [Ticket, en ? 'Voucher fund cash' : '바우처 자금 현금', vouch.cash],
+          ]}
+        />
+        {/* period cash flow: In − Out = Net (green when positive, red when negative) */}
+        <FundCard
+          Icon={Scale}
+          tone="violet"
+          label={en ? 'Net' : '순증감'}
+          note={periodLabel}
+          value={`${monthIn - monthOut < 0 ? '−' : ''}${peso(Math.abs(monthIn - monthOut))}`}
+          valueClass={monthIn - monthOut < 0 ? 'text-bad' : monthIn - monthOut > 0 ? 'text-ok' : 'text-ink'}
+          rows={[
+            [ArrowDownLeft, en ? 'Money in' : '입금', monthIn, '+'],
+            [ArrowUpRight, en ? 'Money out' : '출금', monthOut, '−'],
+          ]}
+        />
       </div>
 
       <div className="card overflow-hidden flex-1 min-h-[360px] flex flex-col">
@@ -822,34 +836,48 @@ const EntryDetails: React.FC<{
   );
 };
 
-const BalanceCard: React.FC<{ Icon: React.ElementType; tone: 'info' | 'warn'; label: string; b: { cash: number; other: number; total: number }; en: boolean }> = ({
-  Icon,
-  tone,
-  label,
-  b,
-  en,
-}) => (
-  <div className={`card p-4 flex flex-col ${tone === 'info' ? '!bg-info-soft !border-info-line' : '!bg-warn-soft !border-warn-line'}`}>
+// soft colour wash, tinted icon tile (same look as the Dashboard cards)
+const FUND_TONE = {
+  info: { wash: 'from-info/20 via-info-soft to-info-soft/30', icon: 'bg-info/15 text-info ring-1 ring-inset ring-info/20' },
+  warn: { wash: 'from-warn/20 via-warn-soft to-warn-soft/30', icon: 'bg-warn/15 text-warn ring-1 ring-inset ring-warn/20' },
+  ok: { wash: 'from-ok/20 via-ok-soft to-ok-soft/30', icon: 'bg-ok/15 text-ok ring-1 ring-inset ring-ok/20' },
+  violet: { wash: 'from-violet/20 via-violet-soft to-violet-soft/30', icon: 'bg-violet/15 text-violet ring-1 ring-inset ring-violet/20' },
+} as const;
+
+const FundCard: React.FC<{
+  Icon: React.ElementType;
+  tone: keyof typeof FUND_TONE;
+  label: string;
+  note?: string;
+  value: string;
+  valueClass: string;
+  /** [icon, name, amount, sign shown before it?] — red below 0 */
+  rows: [React.ElementType, string, number, string?][];
+}> = ({ Icon, tone, label, note, value, valueClass, rows }) => (
+  <div
+    className={`card p-4 flex flex-col bg-linear-to-br ${FUND_TONE[tone].wash} !shadow-[0_1px_2px_rgb(17_18_20/0.05),0_10px_28px_-14px_rgb(17_18_20/0.25)]`}
+  >
     {/* name left, total right */}
-    <div className="flex items-center gap-2.5">
-      <span className={`w-7 h-7 rounded-[8px] grid place-items-center text-white shrink-0 ${tone === 'info' ? 'bg-info' : 'bg-warn'}`}>
-        <Icon className="w-4 h-4" />
+    <div className="flex items-center gap-2.5 min-w-0">
+      <span className={`w-10 h-10 rounded-xl grid place-items-center shrink-0 ${FUND_TONE[tone].icon}`}>
+        <Icon className="w-[18px] h-[18px]" strokeWidth={2} />
       </span>
-      <span className="text-[12px] text-ink-2">{label}</span>
-      <span className={`ml-auto num text-[20px] font-semibold leading-none ${b.total < 0 ? 'text-bad' : tone === 'info' ? 'text-info' : 'text-warn'}`}>{peso(b.total)}</span>
+      <span className="min-w-0 leading-tight">
+        <span className="block text-[12.5px] font-medium text-ink truncate">{label}</span>
+        {note && <span className="block text-[11px] text-muted truncate">{note}</span>}
+      </span>
+      <span className={`ml-auto num text-[20px] font-semibold leading-none whitespace-nowrap ${valueClass}`}>{value}</span>
     </div>
-    {/* where the money is: one line each, amounts lined up on the right (red below 0) */}
-    <div className="mt-3 pt-2.5 border-t border-line/70 grid gap-1.5 text-[12px]">
-      {(
-        [
-          [Banknote, en ? 'Cash' : '현금', b.cash],
-          [Landmark, en ? 'Bank / e-wallet' : '은행·전자', b.other],
-        ] as const
-      ).map(([I, name, v]) => (
+    {/* breakdown: one line each, amounts lined up on the right */}
+    <div className="mt-3 pt-2.5 border-t border-black/[0.06] grid gap-1.5 text-[12px]">
+      {rows.map(([I, name, v, sign]) => (
         <div key={name} className="flex items-center gap-2">
           <I className="w-3.5 h-3.5 text-muted" />
           <span className="text-muted">{name}</span>
-          <span className={`ml-auto num font-semibold ${v < 0 ? 'text-bad' : 'text-ink'}`}>{peso(v)}</span>
+          <span className={`ml-auto num font-semibold ${v < 0 ? 'text-bad' : 'text-ink'}`}>
+            {sign && v !== 0 ? sign : ''}
+            {peso(v)}
+          </span>
         </div>
       ))}
     </div>

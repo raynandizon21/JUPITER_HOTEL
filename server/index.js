@@ -438,7 +438,7 @@ app.get(
       nights: b.NIGHTS,
       amount: b.ROOM_AMOUNT,
       currency: b.CURRENCY || 'PHP',
-      referenceMonth: b.REF_MONTH,
+      referenceMonth: b.REF_MONTH || String(b.CHECK_IN).slice(0, 7),
       remarks: b.REMARKS || '',
       occupancy: b.OCCUPANCY,
       isJupiterGuest: !!b.IS_JUPITER_GUEST,

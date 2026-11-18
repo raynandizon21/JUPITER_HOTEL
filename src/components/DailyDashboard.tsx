@@ -6,8 +6,8 @@ import { itemLabel, purchaseTotal } from '../utils/inventory';
 import { folioOf, voucherTotals, settlementOf, PAYMENT_METHODS, uid, nowStamp, todayISO, printDocument, escapeHtml as esc } from '../utils/billing';
 import { GuestFolio } from './GuestFolio';
 import { exportSettlementExcel } from '../utils/excelExport';
-import { getDaysInMonth, getStayNights, formatCurrency, calculateCasinoStayPrice, formatLongDate, formatMonth, formatDateRange, nightsLabel } from '../utils/hotelHelpers';
-import { FileSpreadsheet, CheckCircle2, ArrowUpRight, Printer, Wallet, Scale, Landmark, Plus, Pencil, Trash2, Receipt, Users, History, BedDouble, Ticket, ShoppingCart } from 'lucide-react';
+import { getDaysInMonth, getStayNights, formatCurrency, formatLongDate, formatShortDate, formatMonth, formatDateRange } from '../utils/hotelHelpers';
+import { FileSpreadsheet, CheckCircle2, Printer, Wallet, Scale, Landmark, Plus, Pencil, Trash2, Receipt, Users, History, BedDouble, Ticket, ShoppingCart, ChevronRight, TrendingUp, TrendingDown, CalendarCheck } from 'lucide-react';
 import { Language } from '../i18n/translations';
 import { PageButtons, PageHeader, Dialog, ConfirmDialog, MonthSelect, MONTHS, RowMenu, toast, ComboInput, Select } from './ui';
 
@@ -25,7 +25,6 @@ interface DailyDashboardProps {
   onOpenInventory: () => void;
   selectedMonth: string;
   setSelectedMonth: (month: string) => void;
-  onNavigateToLedger: () => void;
   language: Language;
 }
 
@@ -68,13 +67,12 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
   onOpenInventory,
   selectedMonth,
   setSelectedMonth,
-  onNavigateToLedger,
   language,
 }) => {
   const en = language === 'en';
   const month = selectedMonth || '2026-11';
 
-  const monthRes = useMemo(() => reservations.filter((r) => r.referenceMonth === month), [reservations, month]);
+  const monthRes = useMemo(() => reservations.filter((r) => r.checkIn.slice(0, 7) === month), [reservations, month]);
   const hotelPays = settlementOf(settlements, month).payments;
   const monthPurchases = useMemo(() => purchases.filter((p) => p.date.slice(0, 7) === month), [purchases, month]);
   // Guest money this month — the SAME rule as the Daily Settlement table, so every number tallies:
@@ -131,11 +129,11 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
   const s = useMemo(() => summarize(monthRes, settlementOf(settlements, month).paid, monthPurchases), [monthRes, settlements, month, monthPurchases]);
 
   const history = useMemo(() => {
-    const months = Array.from(new Set([...MONTHS, ...reservations.map((r) => r.referenceMonth), ...purchases.map((p) => p.date.slice(0, 7))])).sort().reverse();
+    const months = Array.from(new Set([...MONTHS, ...reservations.map((r) => r.checkIn.slice(0, 7)), ...purchases.map((p) => p.date.slice(0, 7))])).sort().reverse();
     return months.map((m) => ({
       month: m,
       ...summarize(
-        reservations.filter((r) => r.referenceMonth === m),
+        reservations.filter((r) => r.checkIn.slice(0, 7) === m),
         settlementOf(settlements, m).paid,
         purchases.filter((p) => p.date.slice(0, 7) === m)
       ),
@@ -154,6 +152,8 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
   const [payFund, setPayFund] = useState<'room' | 'voucher'>('room');
   const [showHotelBill, setShowHotelBill] = useState(false);
   const [showBought, setShowBought] = useState(false);
+  // Settlement History row → that month's breakdown
+  const [historyMonth, setHistoryMonth] = useState<string | null>(null);
   // the month's hotel bill split by fund: room purchases are paid from the Room fund, voucher purchases from the Voucher fund
   const fundBill = { room: 0, voucher: 0 };
   monthPurchases.forEach((p) => p.items.forEach((i) => (fundBill[i.kind] += i.qty * i.unitCost)));
@@ -291,36 +291,11 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
     );
   };
 
-  // Expected amount per folio from the rate master (weekday/weekend × occupancy)
-  const expectedFor = (r: Reservation) => {
-    const room = casinoRates.rooms.find((x) => x.name.toLowerCase() === r.roomType.toLowerCase());
-    if (!room) return null;
-    return calculateCasinoStayPrice(r.checkIn, r.checkOut, room.id, r.occupancy || 'singleDouble', casinoRates, undefined, r.holidayDates, r.compDates).total;
-  };
-
-  const audit = useMemo(() => {
-    const items = monthRes.map((r) => {
-      const expected = expectedFor(r);
-      return { r, expected, diff: expected === null ? 0 : r.amount - expected };
-    });
-    const priced = items.filter((i) => i.expected !== null);
-    const expected = priced.reduce((a, i) => a + (i.expected as number), 0);
-    const billedPriced = priced.reduce((a, i) => a + i.r.amount, 0);
-    const mismatches = priced.filter((i) => Math.abs(i.diff) >= 1).sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
-    return {
-      expected,
-      variance: billedPriced - expected,
-      over: mismatches.filter((i) => i.diff > 0),
-      under: mismatches.filter((i) => i.diff < 0),
-      matched: priced.length - mismatches.length,
-      unpriced: items.length - priced.length,
-      mismatches,
-      byId: new Map(items.map((i) => [i.r.id, i])),
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [monthRes, casinoRates]);
-
-  const [showAudit, setShowAudit] = useState(false);
+  // Profit this month = what guests were charged for this month's nights & vouchers − the Hotel Bill
+  const sales = guestMoney.rooms.billed + guestMoney.vouchers.billed;
+  // newest payment to the hotel for this month (Paid to hotel card)
+  const lastHotelPay = [...hotelPays].sort((x, y) => (y.date + (y.recordedAt || '')).localeCompare(x.date + (x.recordedAt || '')))[0];
+  const profit = sales - s.billed;
 
   return (
     <div>
@@ -346,84 +321,96 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
         }
       />
 
-      {/* Row 1 — basic cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 mb-4">
-        <StatCard
-          Icon={Wallet}
-          label={en ? 'Hotel Bill' : '호텔 청구액'}
-          value={php(s.billed)}
-          pill={`${s.purchases} ${en ? (s.purchases === 1 ? 'purchase' : 'purchases') : '건'}`}
-          tone="neutral"
-          color="blue"
-          onClick={() => setShowBought(true)}
-        />
-        {/* paid to the hotel + what is still due, in one card */}
-        <StatCard
-          Icon={Landmark}
-          label={en ? 'Paid to hotel' : '호텔 지급액'}
-          hint={
-            s.billed === 0 && s.settled === 0
-              ? en ? 'No hotel bill yet' : '호텔 청구 없음'
-              : `${en ? 'Balance due' : '잔액'} ${php(s.balance)}`
-          }
-          value={php(s.settled)}
-          pill={s.balance > 0 ? (en ? 'Open' : '미정산') : s.billed === 0 && s.settled === 0 ? (en ? 'No bill yet' : '청구 없음') : en ? 'Settled' : '정산 완료'}
-          tone={s.balance > 0 ? 'bad' : s.billed === 0 && s.settled === 0 ? 'warn' : 'ok'}
-          color={s.balance > 0 ? 'red' : 'green'}
-          onClick={() => setShowHotelBill(true)}
-        />
-        {(() => {
-          const billed = guestMoney.rooms.billed + guestMoney.vouchers.billed;
-          const received = guestMoney.rooms.paid + guestMoney.vouchers.paid;
-          const unpaidTotal = guestMoney.rooms.unpaid + guestMoney.vouchers.unpaid;
-          return (
-            <>
-              <StatCard
-                Icon={Users}
-                label={en ? 'Guest payments received' : '손님 결제 수령액'}
-                hint={en ? `of ${php(billed)} for this month's nights & vouchers` : `이 달 숙박·바우처 ${php(billed)} 중`}
-                value={php(received)}
-                pill={`${billed ? Math.round((received / billed) * 100) : 0}% ${en ? 'collected' : '수금'}`}
-                tone="ok"
-                color="green"
-                onClick={() => {
-                  setReceivedTab(guestMoney.rooms.paid || !guestMoney.vouchers.paid ? 'room' : 'voucher');
-                  setReceivedPage(0);
-                }}
-              />
-              <StatCard
-                Icon={Receipt}
-                label={en ? 'Unpaid by guests' : '손님 미결제'}
-                hint={
-                  <>
-                    <span className="block whitespace-nowrap">
-                      {en ? 'Rooms' : '객실'} <span className="num font-semibold text-bad">{php(guestMoney.rooms.unpaid)}</span>
-                    </span>
-                    <span className="block whitespace-nowrap">
-                      {en ? 'Voucher' : '바우처'} <span className="num font-semibold text-bad">{php(guestMoney.vouchers.unpaid)}</span>
-                    </span>
-                  </>
-                }
-                value={php(unpaidTotal)}
-                valueClass={unpaidTotal > 0 ? 'text-bad' : 'text-ok'}
-                pill={`${guestMoney.owing.length} ${en ? (guestMoney.owing.length === 1 ? 'guest' : 'guests') : '명'}`}
-                tone={unpaidTotal > 0 ? 'bad' : 'ok'}
-                color={unpaidTotal > 0 ? 'red' : 'green'}
-                onClick={() => openGuestMoney(guestMoney.rooms.unpaid || !guestMoney.vouchers.unpaid ? 'room' : 'voucher')}
-              />
-            </>
-          );
-        })()}
-        <StatCard
-          Icon={Scale}
-          label={en ? 'Rate difference' : '요금 차이'}
-          value={`${audit.variance > 0 ? '+' : audit.variance < 0 ? '−' : ''}${php(Math.abs(audit.variance))}`}
-          pill={`${audit.mismatches.length} ${en ? 'mismatch' : '불일치'}`}
-          tone={audit.mismatches.length ? 'warn' : 'ok'}
-          color="violet"
-          onClick={audit.mismatches.length ? () => setShowAudit(true) : undefined}
-        />
-      </div>
+      {/* Row 1 — cards in the Fund-card style: name + total on top, 2 breakdown lines under */}
+      {(() => {
+        const billed = guestMoney.rooms.billed + guestMoney.vouchers.billed;
+        const received = guestMoney.rooms.paid + guestMoney.vouchers.paid;
+        const unpaidTotal = guestMoney.rooms.unpaid + guestMoney.vouchers.unpaid;
+        const noBill = s.billed === 0 && s.settled === 0;
+        return (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 mb-4">
+            <StatCard
+              en={en}
+              Icon={Wallet}
+              color="blue"
+              label={en ? 'Hotel Bill' : '호텔 청구액'}
+              note={`${s.purchases} ${en ? (s.purchases === 1 ? 'purchase' : 'purchases') : '건'}`}
+              value={php(s.billed)}
+              valueClass="text-accent"
+              rows={[
+                [BedDouble, en ? 'Rooms' : '객실', php(fundBill.room)],
+                [Ticket, en ? 'Vouchers' : '바우처', php(fundBill.voucher)],
+              ]}
+              onClick={() => setShowBought(true)}
+            />
+            <StatCard
+              en={en}
+              Icon={Landmark}
+              color="green"
+              label={en ? 'Paid to hotel' : '호텔 지급액'}
+              note={
+                noBill
+                  ? en ? 'No bill yet' : '청구 없음'
+                  : `${s.balance > 0 ? (en ? 'Open' : '미정산') : en ? 'Settled' : '정산 완료'} · ${Math.min(100, Math.round((s.settled / s.billed) * 100))}% ${en ? 'paid' : '지급'}`
+              }
+              value={php(s.settled)}
+              valueClass="text-ok"
+              rows={[
+                [Scale, en ? 'Remaining balance' : '남은 잔액', php(s.balance), s.balance > 0 ? 'text-bad' : 'text-ink'],
+                lastHotelPay
+                  ? [CalendarCheck, `${en ? 'Last paid' : '최근 지급'} · ${formatShortDate(lastHotelPay.date)}`, php(lastHotelPay.amount)]
+                  : [CalendarCheck, en ? 'Last paid' : '최근 지급', en ? 'None yet' : '없음', 'text-muted'],
+              ]}
+              onClick={() => setShowHotelBill(true)}
+            />
+            <StatCard
+              en={en}
+              Icon={Users}
+              color="green"
+              label={en ? 'Guest payments' : '손님 결제'}
+              note={`${billed ? Math.round((received / billed) * 100) : 0}% ${en ? 'collected' : '수금'}`}
+              value={php(received)}
+              valueClass="text-ok"
+              rows={[
+                [BedDouble, en ? 'Rooms' : '객실', php(guestMoney.rooms.paid)],
+                [Ticket, en ? 'Vouchers' : '바우처', php(guestMoney.vouchers.paid)],
+              ]}
+              onClick={() => {
+                setReceivedTab(guestMoney.rooms.paid || !guestMoney.vouchers.paid ? 'room' : 'voucher');
+                setReceivedPage(0);
+              }}
+            />
+            <StatCard
+              en={en}
+              Icon={Receipt}
+              color="red"
+              label={en ? 'Unpaid by guests' : '손님 미결제'}
+              note={`${guestMoney.owing.length} ${en ? (guestMoney.owing.length === 1 ? 'guest' : 'guests') : '명'}`}
+              value={php(unpaidTotal)}
+              valueClass={unpaidTotal > 0 ? 'text-bad' : 'text-ok'}
+              rows={[
+                [BedDouble, en ? 'Rooms' : '객실', php(guestMoney.rooms.unpaid), guestMoney.rooms.unpaid > 0 ? 'text-bad' : 'text-ink'],
+                [Ticket, en ? 'Vouchers' : '바우처', php(guestMoney.vouchers.unpaid), guestMoney.vouchers.unpaid > 0 ? 'text-bad' : 'text-ink'],
+              ]}
+              onClick={() => openGuestMoney(guestMoney.rooms.unpaid || !guestMoney.vouchers.unpaid ? 'room' : 'voucher')}
+            />
+            <StatCard
+              en={en}
+              Icon={profit < 0 ? TrendingDown : TrendingUp}
+              color={profit < 0 ? 'red' : 'green'}
+              label={en ? 'Profit' : '이익'}
+              note={sales ? `${Math.round((profit / sales) * 100)}% ${en ? 'of sales' : '매출 대비'}` : en ? 'No sales yet' : '매출 없음'}
+              value={`${profit < 0 ? '−' : ''}${php(Math.abs(profit))}`}
+              valueClass={profit < 0 ? 'text-bad' : 'text-ok'}
+              rows={[
+                [Users, en ? 'Sales to guests' : '손님 매출', php(sales)],
+                [Wallet, en ? 'Hotel Bill' : '호텔 청구액', `−${php(s.billed)}`],
+              ]}
+              noFooter
+            />
+          </div>
+        );
+      })()}
 
       {/* Row 2 — daily settlement + payments / guest balances */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-4">
@@ -446,7 +433,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 className="card-title flex items-center gap-2.5">
-                  <span className="w-7 h-7 rounded-[8px] bg-ok text-white grid place-items-center">
+                  <span className="w-8 h-8 rounded-[10px] grid place-items-center bg-ok-soft text-ok">
                     <Landmark className="w-4 h-4" strokeWidth={1.75} />
                   </span>
                   {en ? 'Payments to Hotel' : '호텔 지급 내역'}
@@ -498,7 +485,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
           {/* Guest balances */}
           <div className="card p-6 flex flex-col">
             <h3 className="card-title flex items-center gap-2.5">
-              <span className="w-7 h-7 rounded-[8px] bg-warn text-white grid place-items-center">
+              <span className="w-8 h-8 rounded-[10px] grid place-items-center bg-warn-soft text-warn">
                 <Users className="w-4 h-4" strokeWidth={1.75} />
               </span>
               {en ? 'Guest Balances' : '손님 미수금'}
@@ -526,12 +513,12 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
         <div className="card-head">
           <div>
             <h3 className="card-title flex items-center gap-2.5">
-              <span className="w-7 h-7 rounded-[8px] bg-violet text-white grid place-items-center">
+              <span className="w-8 h-8 rounded-[10px] grid place-items-center bg-violet-soft text-violet">
                 <History className="w-4 h-4" strokeWidth={1.75} />
               </span>
               {en ? 'Settlement History' : '정산 이력'}
             </h3>
-            <p className="text-[12.5px] text-muted mt-1">{en ? 'Click a month to open it' : '월을 클릭하면 해당 월로 이동합니다'}</p>
+            <p className="text-[12.5px] text-muted mt-1">{en ? 'Click a month to see its breakdown' : '월을 클릭하면 내역을 볼 수 있습니다'}</p>
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -550,7 +537,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
             </thead>
             <tbody>
               {history.map((h) => (
-                <tr key={h.month} onClick={() => setSelectedMonth(h.month)} className={`cursor-pointer ${h.month === month ? '!bg-accent-soft/60' : ''}`}>
+                <tr key={h.month} onClick={() => setHistoryMonth(h.month)} className={`cursor-pointer ${h.month === month ? '!bg-accent-soft/60' : ''}`}>
                   <td className={`font-medium text-ink whitespace-nowrap ${h.month === month ? 'shadow-[inset_3px_0_0_var(--color-accent)]' : ''}`}>{formatMonth(h.month)}</td>
                   <td className="c num">{h.count ? <span className="inline-grid place-items-center min-w-6 h-6 px-1.5 rounded-full bg-accent-soft text-accent font-semibold">{h.count}</span> : <Dim />}</td>
                   <td className="c num">{h.nights || <Dim />}</td>
@@ -580,6 +567,156 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
           </table>
         </div>
       </div>
+
+      {/* Settlement History → one month's breakdown: one table, per fund, what was bought and what was paid */}
+      {historyMonth &&
+        (() => {
+          const m = historyMonth;
+          const h = history.find((x) => x.month === m)!;
+          const bought = purchases.filter((p) => p.date.slice(0, 7) === m).sort((a, b) => a.date.localeCompare(b.date));
+          const pays = [...settlementOf(settlements, m).payments].sort((a, b) => a.date.localeCompare(b.date));
+          const pct = h.billed > 0 ? Math.min(100, Math.round((h.settled / h.billed) * 100)) : 0;
+          const SHOW = 6; // lines per fund before "+N more" (keeps the pop-up without a scrollbar)
+          const funds = (['room', 'voucher'] as const).map((k) => {
+            const lines = [
+              ...bought.flatMap((p) =>
+                p.items
+                  .filter((i) => i.kind === k)
+                  .map((i) => ({
+                    key: `${p.id}-${i.id}`,
+                    date: p.date,
+                    what: (
+                      <>
+                        <b className="font-semibold text-ink">{i.qty}</b> × {itemLabel(i, casinoRates, en)}
+                        {!i.unitCost && <span className="ml-1.5 badge badge-ok">{en ? 'Free' : '무료'}</span>}
+                      </>
+                    ),
+                    method: '',
+                    bill: i.qty * i.unitCost,
+                    paid: 0,
+                  }))
+              ),
+              ...pays
+                .filter((p) => (p.fund === 'voucher' ? 'voucher' : 'room') === k)
+                .map((p) => ({
+                  key: p.id,
+                  date: p.date,
+                  what: (
+                    <span className="text-ok">
+                      {en ? 'Payment to hotel' : '호텔 지급'}
+                      {p.reference ? <span className="text-muted"> · {p.reference}</span> : null}
+                    </span>
+                  ),
+                  method: p.method as string,
+                  bill: 0,
+                  paid: p.amount,
+                })),
+            ].sort((x, y) => x.date.localeCompare(y.date) || y.bill - x.bill);
+            const bill = lines.reduce((a, x) => a + x.bill, 0);
+            const paid = lines.reduce((a, x) => a + x.paid, 0);
+            return { k, lines, bill, paid, due: Math.max(bill - paid, 0) };
+          });
+          return (
+            <Dialog
+              width="max-w-3xl"
+              onClose={() => setHistoryMonth(null)}
+              title={en ? `Settlement · ${formatMonth(m)}` : `정산 · ${formatMonth(m)}`}
+              subtitle={
+                en
+                  ? `${bought.length} ${bought.length === 1 ? 'purchase' : 'purchases'} · ${pays.length} ${pays.length === 1 ? 'payment' : 'payments'} to the hotel${h.count ? ` · ${h.count} ${h.count === 1 ? 'booking' : 'bookings'}, ${h.nights} ${h.nights === 1 ? 'night' : 'nights'}` : ''}`
+                  : `구매 ${bought.length}건 · 호텔 지급 ${pays.length}건${h.count ? ` · 예약 ${h.count}건, ${h.nights}박` : ''}`
+              }
+            >
+              <div className="px-6 py-4 grid gap-3">
+                {/* how much of the bill is paid */}
+                <div className="flex items-center gap-3 text-[12px]">
+                  <span className="text-muted whitespace-nowrap">
+                    {en ? 'Paid' : '지급'} <b className="num text-ok">{php(h.settled)}</b> {en ? 'of' : '/'} <b className="num text-ink">{php(h.billed)}</b>
+                  </span>
+                  <RaceLine pct={pct} track="bg-canvas" />
+                  <span className="num font-bold text-ink">{pct}%</span>
+                </div>
+
+                <table className="dtable compact">
+                  <thead>
+                    <tr>
+                      <th className="w-[150px]">{en ? 'Date' : '날짜'}</th>
+                      <th>{en ? 'Details' : '내역'}</th>
+                      <th>{en ? 'Payment method' : '지급 수단'}</th>
+                      <th className="r !text-accent">{en ? 'Hotel Bill' : '호텔 청구액'}</th>
+                      <th className="r !text-ok">{en ? 'Paid' : '지급'}</th>
+                    </tr>
+                  </thead>
+                  {funds.map((f) => (
+                    <tbody key={f.k}>
+                      {/* fund header: name + what is still due */}
+                      <tr className={f.k === 'room' ? '!bg-accent-soft/60' : '!bg-warn-soft/60'}>
+                        <td colSpan={3}>
+                          <span className={`inline-flex items-center gap-2 font-semibold ${f.k === 'room' ? 'text-accent' : 'text-warn'}`}>
+                            {f.k === 'room' ? <BedDouble className="w-4 h-4" /> : <Ticket className="w-4 h-4" />}
+                            {f.k === 'room' ? (en ? 'Room fund' : '객실 자금') : en ? 'Voucher fund' : '바우처 자금'}
+                          </span>
+                        </td>
+                        <td colSpan={2} className="r text-[12px]">
+                          {f.bill === 0 && f.paid === 0 ? (
+                            <span className="text-muted">{en ? 'Nothing bought' : '구매 없음'}</span>
+                          ) : f.due > 0 ? (
+                            <span className="text-bad font-semibold">
+                              {en ? 'Balance' : '잔액'} <span className="num">{php(f.due)}</span>
+                            </span>
+                          ) : (
+                            <span className="text-ok font-semibold">{en ? 'Fully paid' : '지급 완료'}</span>
+                          )}
+                        </td>
+                      </tr>
+                      {f.lines.slice(0, SHOW).map((x) => (
+                        <tr key={x.key}>
+                          <td className="text-ink-2 whitespace-nowrap pl-8">{formatLongDate(x.date)}</td>
+                          <td className="text-ink-2">{x.what}</td>
+                          <td className="text-ink-2 whitespace-nowrap">{x.method || <Dim />}</td>
+                          <td className="r num font-semibold text-ink">{x.bill ? php(x.bill) : <Dim />}</td>
+                          <td className="r num font-semibold text-ok">{x.paid ? php(x.paid) : <Dim />}</td>
+                        </tr>
+                      ))}
+                      {f.lines.length > SHOW && (
+                        <tr>
+                          <td colSpan={5} className="pl-8 text-[11.5px] text-muted">
+                            +{f.lines.length - SHOW} {en ? 'more' : '건 더'}
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  ))}
+                  <tfoot>
+                    <tr>
+                      <td colSpan={3}>{en ? 'Total' : '합계'}</td>
+                      <td className="r num text-accent">{php(h.billed)}</td>
+                      <td className="r num text-ok">{php(h.settled)}</td>
+                    </tr>
+                    <tr>
+                      <td colSpan={3}>{en ? 'Balance due to hotel' : '호텔 미지급 잔액'}</td>
+                      <td colSpan={2} className={`r num text-[15px] ${h.balance > 0 ? 'text-bad' : 'text-ok'}`}>{php(h.balance)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+              <div className="px-6 py-3 border-t border-line bg-sunken flex justify-end gap-2">
+                <button onClick={() => setHistoryMonth(null)} className="btn btn-ghost">
+                  {en ? 'Close' : '닫기'}
+                </button>
+                <button
+                  onClick={() => {
+                    setSelectedMonth(m);
+                    setHistoryMonth(null);
+                  }}
+                  className="btn btn-primary"
+                >
+                  {en ? `Open ${formatMonth(m)}` : `${formatMonth(m)} 열기`}
+                </button>
+              </div>
+            </Dialog>
+          );
+        })()}
 
       {/* Hotel Bill → what was bought from the hotel this month */}
       {showBought && (
@@ -662,51 +799,115 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
       {/* Paid to hotel → how much of the month's hotel bill is paid, per fund */}
       {showHotelBill && (
         <Dialog
-          width="max-w-xl"
+          width="max-w-3xl"
           onClose={() => setShowHotelBill(false)}
           title={en ? `Hotel bill · ${formatMonth(month)}` : `호텔 청구 · ${formatMonth(month)}`}
-          subtitle={en ? "How much of this month's hotel bill is paid, per fund" : '이 달 호텔 청구액의 자금별 지급 현황'}
+          subtitle={en ? `Payments to the hotel this month, per fund · ${hotelPays.length} ${hotelPays.length === 1 ? 'payment' : 'payments'}` : `이 달 자금별 호텔 지급 내역 · ${hotelPays.length}건`}
         >
           <div className="px-6 py-4 grid gap-4">
-            <table className="dtable compact">
-              <thead>
-                <tr>
-                  <th>{en ? 'Fund' : '자금'}</th>
-                  <th className="r">{en ? 'Hotel bill' : '청구액'}</th>
-                  <th className="r">{en ? 'Paid' : '지급액'}</th>
-                  <th className="r">{en ? 'Balance' : '잔액'}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(
-                  [
-                    ['room', BedDouble, en ? 'Room fund' : '객실 자금', 'text-accent'],
-                    ['voucher', Ticket, en ? 'Voucher fund' : '바우처 자금', 'text-warn'],
-                  ] as const
-                ).map(([k, Icon, label, tone]) => (
-                  <tr key={k}>
-                    <td>
-                      <span className={`inline-flex items-center gap-2 font-medium ${tone}`}>
-                        <Icon className="w-4 h-4" />
-                        {label}
+            {/* 1) each fund: bill → paid → remaining */}
+            <div className="grid grid-cols-2 gap-3">
+              {(
+                [
+                  ['room', BedDouble, en ? 'Room fund' : '객실 자금', 'text-accent', 'bg-accent-soft/60 border-accent-line'],
+                  ['voucher', Ticket, en ? 'Voucher fund' : '바우처 자금', 'text-warn', 'bg-warn-soft/60 border-warn-line'],
+                ] as const
+              ).map(([k, Icon, label, tone, box]) => {
+                const pct = fundBill[k] ? Math.min(100, Math.round((fundPaid[k] / fundBill[k]) * 100)) : 0;
+                return (
+                  <div key={k} className={`rounded-xl border px-4 py-3 ${box}`}>
+                    <div className={`flex items-center gap-2 text-[13px] font-semibold ${tone}`}>
+                      <Icon className="w-4 h-4" />
+                      {label}
+                      <span className="ml-auto num text-[11.5px] text-muted font-medium">
+                        {pct}% {en ? 'paid' : '지급'}
                       </span>
-                    </td>
-                    <td className="r num">{php(fundBill[k])}</td>
-                    <td className="r num text-ok">{php(fundPaid[k])}</td>
-                    <td className={`r num font-semibold ${fundDue[k] > 0 ? 'text-bad' : 'text-muted'}`}>{php(fundDue[k])}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td>{en ? 'Total' : '합계'}</td>
-                  <td className="r num">{php(s.billed)}</td>
-                  <td className="r num text-ok">{php(s.settled)}</td>
-                  <td className="r num text-bad">{php(s.balance)}</td>
-                </tr>
-              </tfoot>
-            </table>
+                    </div>
+                    <div className="mt-2 grid gap-1 text-[12.5px]">
+                      <div className="flex justify-between">
+                        <span className="text-muted">{en ? 'Hotel bill' : '청구액'}</span>
+                        <span className="num font-semibold text-ink">{php(fundBill[k])}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted">{en ? 'Paid' : '지급'}</span>
+                        <span className="num font-semibold text-ok">−{php(fundPaid[k])}</span>
+                      </div>
+                      <div className="flex justify-between border-t border-black/[0.07] pt-1 mt-0.5">
+                        <span className="font-semibold text-ink">{en ? 'Remaining' : '잔액'}</span>
+                        <span className={`num font-bold ${fundDue[k] > 0 ? 'text-bad' : 'text-ok'}`}>{php(fundDue[k])}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
 
+            {/* 2) every payment made to the hotel this month */}
+            {(() => {
+              const list = [...hotelPays].sort((x, y) => x.date.localeCompare(y.date));
+              const SHOW = 6;
+              return (
+                <table className="dtable compact">
+                  <thead>
+                    <tr>
+                      <th>{en ? 'Date paid' : '지급일'}</th>
+                      <th>{en ? 'From fund' : '자금'}</th>
+                      <th>{en ? 'Payment method' : '지급 수단'}</th>
+                      <th>{en ? 'Reference / OIC' : '참조 / OIC'}</th>
+                      <th className="r">{en ? 'Amount' : '금액'}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {list.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-6 text-center text-[12.5px] text-muted">
+                          {en ? 'No payments to the hotel yet' : '호텔 지급 내역이 없습니다'}
+                        </td>
+                      </tr>
+                    ) : (
+                      list.slice(0, SHOW).map((p) => (
+                        <tr key={p.id}>
+                          <td className="text-ink-2 whitespace-nowrap">
+                            {formatLongDate(p.date)}
+                            {p.recordedAt && <div className="text-[11px] text-muted">{en ? 'recorded' : '기록'} {clockOf(p.recordedAt)}</div>}
+                          </td>
+                          <td>
+                            <span className={`badge ${p.fund === 'voucher' ? 'badge-warn' : 'badge-info'}`}>
+                              {p.fund === 'voucher' ? (en ? 'Voucher fund' : '바우처 자금') : en ? 'Room fund' : '객실 자금'}
+                            </span>
+                          </td>
+                          <td className="text-ink-2 whitespace-nowrap">{p.method}</td>
+                          <td className="text-muted">
+                            {[p.reference, p.oic && `OIC ${p.oic}`].filter(Boolean).join(' · ') || <Dim />}
+                            {p.remarks && <div className="text-[11px] text-faint truncate max-w-[220px]" title={p.remarks}>{p.remarks}</div>}
+                          </td>
+                          <td className="r num font-semibold text-ok">{php(p.amount)}</td>
+                        </tr>
+                      ))
+                    )}
+                    {list.length > SHOW && (
+                      <tr>
+                        <td colSpan={5} className="text-[11.5px] text-muted">
+                          +{list.length - SHOW} {en ? 'more' : '건 더'}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                  <tfoot>
+                    <tr>
+                      <td colSpan={4}>
+                        {en ? 'Total paid' : '지급 합계'}
+                      </td>
+                      <td className="r num text-ok">{php(s.settled)}</td>
+                    </tr>
+                    <tr>
+                      <td colSpan={4}>{en ? 'Remaining balance' : '남은 잔액'}</td>
+                      <td className={`r num text-[15px] ${s.balance > 0 ? 'text-bad' : 'text-ok'}`}>{php(s.balance)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              );
+            })()}
           </div>
           <div className="px-6 py-3 border-t border-line bg-sunken flex justify-end gap-2">
             <button onClick={() => setShowHotelBill(false)} className="btn btn-ghost">
@@ -913,58 +1114,6 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
                 </div>
               );
             })()}
-          </div>
-        </Dialog>
-      )}
-
-      {showAudit && (
-        <Dialog
-          width="max-w-4xl"
-          onClose={() => setShowAudit(false)}
-          title={en ? `Rate differences · ${formatMonth(month)}` : `요금 차이 · ${formatMonth(month)}`}
-          subtitle={
-            en
-              ? `${audit.over.length} billed above rate card · ${audit.under.length} below · net ${audit.variance >= 0 ? '+' : '−'}${php(Math.abs(audit.variance))}`
-              : `요금표 초과 ${audit.over.length}건 · 미달 ${audit.under.length}건 · 순 차액 ${audit.variance >= 0 ? '+' : '−'}${php(Math.abs(audit.variance))}`
-          }
-        >
-          <div className="max-h-[60vh] overflow-y-auto">
-            <table className="dtable">
-              <thead>
-                <tr>
-                  <th>{en ? 'Guest' : '손님'}</th>
-                  <th>{en ? 'Room' : '객실'}</th>
-                  <th>{en ? 'Stay' : '기간'}</th>
-                  <th className="r">{en ? 'Rate card' : '요금표'}</th>
-                  <th className="r">{en ? 'Billed' : '청구액'}</th>
-                  <th className="r">{en ? 'Variance' : '차액'}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {audit.mismatches.map(({ r, expected, diff }) => (
-                  <tr key={r.id}>
-                    <td>
-                      <div className="font-medium text-ink">{r.guestName}</div>
-                      {r.remarks && <div className="text-[11.5px] text-muted truncate max-w-[220px]" title={r.remarks}>{r.remarks}</div>}
-                    </td>
-                    <td className="whitespace-nowrap">{r.roomType} <span className="text-faint">· {r.occupancy === 'triple' ? '3' : '1–2'}</span></td>
-                    <td className="text-muted whitespace-nowrap">{formatDateRange(r.checkIn, r.checkOut)} · {nightsLabel(r.nights, en)}</td>
-                    <td className="r num text-muted">{php(expected as number)}</td>
-                    <td className="r num font-medium text-ink">{php(r.amount)}</td>
-                    <td className={`r num font-semibold ${diff > 0 ? 'text-bad' : 'text-info'}`}>{diff > 0 ? '+' : '−'}{php(Math.abs(diff))}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="px-6 py-4 border-t border-line flex items-center justify-between gap-3">
-            <span className="text-[12px] text-muted">
-              <span className="text-bad font-medium">+</span> {en ? 'billed above rate card' : '요금표 초과 청구'} · <span className="text-info font-medium">−</span> {en ? 'below rate card' : '요금표 미달'}
-            </span>
-            <button onClick={onNavigateToLedger} className="btn btn-primary">
-              {en ? 'Fix in ledger' : '예약 관리부에서 수정'}
-              <ArrowUpRight className="w-3.5 h-3.5" />
-            </button>
           </div>
         </Dialog>
       )}
@@ -1268,6 +1417,28 @@ const GuestMoneyTable: React.FC<{ rows: GuestMoneyRow[]; all: GuestMoneyRow[]; k
   </table>
 );
 
+/** Progress line that fills from 0 to `pct` when it appears. */
+const RaceLine: React.FC<{ pct: number; track: string }> = ({ pct, track }) => {
+  const [w, setW] = useState(0);
+  React.useEffect(() => {
+    const id = requestAnimationFrame(() => setW(pct));
+    return () => cancelAnimationFrame(id);
+  }, [pct]);
+  return (
+    <div className={`flex-1 h-2 rounded-full overflow-hidden ${track}`}>
+      <div className="h-full rounded-full bg-ok transition-[width] duration-1000 ease-out" style={{ width: `${w}%` }} />
+    </div>
+  );
+};
+
+/** "2026-11-18 21:10:05" → "9:10 PM" */
+const clockOf = (at: string) => {
+  const m = /[ T](\d{2}):(\d{2})/.exec(at);
+  if (!m) return '';
+  const h = Number(m[1]);
+  return `${h % 12 || 12}:${m[2]} ${h < 12 ? 'AM' : 'PM'}`;
+};
+
 const Dim: React.FC = () => <span className="text-faint/70">·</span>;
 
 const Empty: React.FC<{ text: string; ok?: boolean }> = ({ text, ok }) => (
@@ -1279,58 +1450,91 @@ const Empty: React.FC<{ text: string; ok?: boolean }> = ({ text, ok }) => (
   </div>
 );
 
-// pill text colour (the pill sits on a white chip so it reads on any card colour)
-const TONE = {
-  ok: 'text-ok',
-  warn: 'text-warn',
-  bad: 'text-bad',
-  neutral: 'text-ink-2',
-} as const;
-
 // card colour: tinted background + border, solid icon tile
+// card colour = the Daily Settlement column colours (blue total · green paid · red unpaid · amber vouchers)
 const CARD_COLOR = {
-  blue: { card: '!bg-accent-soft !border-accent-line', icon: 'bg-accent' },
-  green: { card: '!bg-ok-soft !border-ok-line', icon: 'bg-ok' },
-  red: { card: '!bg-bad-soft !border-bad-line', icon: 'bg-bad' },
-  amber: { card: '!bg-warn-soft !border-warn-line', icon: 'bg-warn' },
-  violet: { card: '!bg-violet-soft !border-violet-line', icon: 'bg-violet' },
+  blue: { text: 'text-accent', tile: 'bg-accent/15 text-accent ring-1 ring-inset ring-accent/20', wash: 'from-accent/20 via-accent-soft to-accent-soft/30', ring: 'hover:border-accent/40', btn: 'group-hover:bg-accent group-hover:text-white' },
+  green: { text: 'text-ok', tile: 'bg-ok/15 text-ok ring-1 ring-inset ring-ok/20', wash: 'from-ok/20 via-ok-soft to-ok-soft/30', ring: 'hover:border-ok/40', btn: 'group-hover:bg-ok group-hover:text-white' },
+  red: { text: 'text-bad', tile: 'bg-bad/15 text-bad ring-1 ring-inset ring-bad/20', wash: 'from-bad/20 via-bad-soft to-bad-soft/30', ring: 'hover:border-bad/40', btn: 'group-hover:bg-bad group-hover:text-white' },
+  amber: { text: 'text-warn', tile: 'bg-warn/15 text-warn ring-1 ring-inset ring-warn/20', wash: 'from-warn/20 via-warn-soft to-warn-soft/30', ring: 'hover:border-warn/40', btn: 'group-hover:bg-warn group-hover:text-white' },
+  violet: { text: 'text-violet', tile: 'bg-violet/15 text-violet ring-1 ring-inset ring-violet/20', wash: 'from-violet/20 via-violet-soft to-violet-soft/30', ring: 'hover:border-violet/40', btn: 'group-hover:bg-violet group-hover:text-white' },
 } as const;
 
+/**
+ * Dashboard card: icon + name left, total right, breakdown lines under, "View details" at the bottom.
+ * One soft colour wash, no hard split.
+ */
 const StatCard: React.FC<{
   Icon: React.ElementType;
   label: string;
+  /** small grey note under the name (count / status) */
+  note?: string;
   value: React.ReactNode;
-  /** a string = one chip; any other node is shown as is */
-  pill: React.ReactNode;
-  tone: keyof typeof TONE;
-  color: keyof typeof CARD_COLOR;
-  onClick?: () => void;
-  /** small note under the label (what the number counts) */
-  hint?: React.ReactNode;
-  /** colour of the big number (default ink) */
+  /** colour of the total (default ink) */
   valueClass?: string;
-}> = ({ Icon, label, value, pill, tone, color, onClick, hint, valueClass = 'text-ink' }) => (
-  <div
-    onClick={onClick}
-    className={`card ${CARD_COLOR[color].card} p-5 flex flex-col justify-between min-h-[118px] ${onClick ? 'cursor-pointer hover:brightness-[0.98] transition' : ''}`}
-  >
-    <div className="flex items-center gap-3">
-      <span className={`w-9 h-9 rounded-[10px] grid place-items-center text-white ${CARD_COLOR[color].icon}`}>
-        <Icon className="w-[18px] h-[18px]" strokeWidth={1.75} />
-      </span>
-      <span className="leading-tight">
-        <span className="block text-[13px] text-ink-2">{label}</span>
-        {hint && <span className="block text-[11px] text-muted mt-0.5">{hint}</span>}
-      </span>
-      {onClick && <ArrowUpRight className="w-3.5 h-3.5 text-faint ml-auto" />}
-    </div>
-    <div className="flex items-end justify-between gap-2 mt-4">
-      <span className={`num text-[22px] font-semibold leading-none tracking-tight ${valueClass}`}>{value}</span>
-      {typeof pill === 'string' ? (
-        <span className={`num inline-flex items-center h-6 px-2 rounded-full text-[11px] font-semibold whitespace-nowrap bg-surface/80 ${TONE[tone]}`}>{pill}</span>
-      ) : (
-        pill
+  color: keyof typeof CARD_COLOR;
+  /** breakdown lines: [icon, name, amount, amount colour?] */
+  rows: [React.ElementType, string, string, string?][];
+  /** optional "how much is done" line (0–100) under the breakdown */
+  progress?: number;
+  onClick?: () => void;
+  /** hide the "View details" / "Nothing to check" line (card opens nothing) */
+  noFooter?: boolean;
+  en: boolean;
+}> = ({ Icon, label, note, value, valueClass = 'text-ink', color, rows, progress, onClick, noFooter, en }) => {
+  const c = CARD_COLOR[color];
+  return (
+    <div
+      onClick={onClick}
+      title={onClick ? (en ? 'Click to see the breakdown' : '클릭하여 내역 보기') : undefined}
+      className={`card relative overflow-hidden flex flex-col p-4 bg-linear-to-br ${c.wash} !shadow-[0_1px_2px_rgb(17_18_20/0.05),0_10px_28px_-14px_rgb(17_18_20/0.25)] transition-all duration-200 ${
+        onClick ? `group cursor-pointer hover:-translate-y-0.5 ${c.ring} hover:!shadow-[0_2px_4px_rgb(17_18_20/0.06),0_18px_36px_-16px_rgb(17_18_20/0.32)]` : ''
+      }`}
+    >
+      {/* name left, total right */}
+      <div className="flex items-center gap-2.5 min-w-0">
+        <span className={`w-10 h-10 rounded-xl grid place-items-center shrink-0 ${c.tile}`}>
+          <Icon className="w-[18px] h-[18px]" strokeWidth={2} />
+        </span>
+        <span className="min-w-0 leading-tight">
+          <span className="block text-[12.5px] font-medium text-ink truncate">{label}</span>
+          {note && <span className="block text-[11px] text-muted truncate">{note}</span>}
+        </span>
+        <span className={`ml-auto num text-[20px] font-semibold leading-none whitespace-nowrap ${valueClass}`}>{value}</span>
+      </div>
+
+      {/* breakdown: one line each, amounts lined up on the right */}
+      <div className="mt-3 pt-2.5 border-t border-black/[0.06] grid gap-1.5 text-[12px]">
+        {rows.map(([I, name, v, cls]) => (
+          <div key={name} className="flex items-center gap-2">
+            <I className="w-3.5 h-3.5 text-muted" />
+            <span className="text-muted">{name}</span>
+            <span className={`ml-auto num font-semibold ${cls || 'text-ink'}`}>{v}</span>
+          </div>
+        ))}
+        {progress !== undefined && (
+          <div className="flex items-center gap-2">
+            <RaceLine pct={progress} track="bg-canvas" />
+            <span className={`num font-semibold w-9 text-right ${progress >= 100 ? 'text-ok' : 'text-ink'}`}>{progress}%</span>
+          </div>
+        )}
+      </div>
+
+      {/* tells staff the card opens a breakdown */}
+      {!noFooter && (
+      <div className="mt-auto pt-2.5">
+        <div className="pt-2 border-t border-black/[0.06] flex items-center text-[11.5px] font-semibold">
+          {onClick ? (
+            <span className={`inline-flex items-center gap-1 ${c.text}`}>
+              {en ? 'View details' : '자세히 보기'}
+              <ChevronRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
+            </span>
+          ) : (
+            <span className="text-faint font-medium">{en ? 'Nothing to check' : '확인할 내역 없음'}</span>
+          )}
+        </div>
+      </div>
       )}
     </div>
-  </div>
-);
+  );
+};

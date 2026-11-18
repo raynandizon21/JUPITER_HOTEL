@@ -333,16 +333,16 @@ export const InventoryPage: React.FC<{
 const Dim: React.FC = () => <span className="text-faint/70">·</span>;
 
 const TONES = {
-  info: { card: '!bg-info-soft !border-info-line', icon: 'bg-info', value: 'text-info' },
-  warn: { card: '!bg-warn-soft !border-warn-line', icon: 'bg-warn', value: 'text-warn' },
-  ok: { card: '!bg-ok-soft !border-ok-line', icon: 'bg-ok', value: 'text-ok' },
-  bad: { card: '!bg-bad-soft !border-bad-line', icon: 'bg-bad', value: 'text-bad' },
-  neutral: { card: '', icon: 'bg-ink', value: 'text-ink' },
+  info: { card: '!bg-info-soft !border-info-line', icon: 'bg-surface text-info', value: 'text-info' },
+  warn: { card: '!bg-warn-soft !border-warn-line', icon: 'bg-surface text-warn', value: 'text-warn' },
+  ok: { card: '!bg-ok-soft !border-ok-line', icon: 'bg-surface text-ok', value: 'text-ok' },
+  bad: { card: '!bg-bad-soft !border-bad-line', icon: 'bg-surface text-bad', value: 'text-bad' },
+  neutral: { card: '', icon: 'bg-ink/10 text-ink', value: 'text-ink' },
 } as const;
 
 const Card: React.FC<{ Icon: React.ElementType; tone: keyof typeof TONES; label: string; value: string; hint: string }> = ({ Icon, tone, label, value, hint }) => (
   <div className={`card px-3.5 py-2.5 flex items-center gap-3 ${TONES[tone].card}`}>
-    <span className={`w-8 h-8 rounded-[8px] grid place-items-center text-white shrink-0 ${TONES[tone].icon}`}>
+    <span className={`w-10 h-10 rounded-xl grid place-items-center shrink-0 ${TONES[tone].icon}`}>
       <Icon className="w-4 h-4" />
     </span>
     <div className="min-w-0 flex-1 leading-tight">

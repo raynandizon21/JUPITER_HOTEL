@@ -68,6 +68,8 @@ export interface FolioPayment {
   remarks?: string;
   /** when the payment was recorded, 'YYYY-MM-DD HH:MM:SS' (set when added; saved as RECORDED_AT) */
   recordedAt?: string;
+  /** payments to the hotel: which fund paid it (room purchases → room, voucher purchases → voucher); default room */
+  fund?: 'room' | 'voucher';
 }
 
 /**

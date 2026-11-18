@@ -258,27 +258,31 @@ export const Pager: React.FC<{
         </label>
       )}
     </div>
-    {pages > 1 && (
-      <div className="flex items-center gap-1">
-        <button onClick={() => onPage(page - 1)} disabled={page === 0} className="icon-btn disabled:opacity-30" aria-label="Previous page">
-          <ChevronLeft className="w-4 h-4" />
-        </button>
-        {Array.from({ length: pages }, (_, i) => (
-          <button
-            key={i}
-            onClick={() => onPage(i)}
-            className={`min-w-[28px] h-7 px-2 rounded-lg num cursor-pointer ${i === page ? 'bg-ink text-white font-semibold' : 'text-ink-2 hover:bg-canvas'}`}
-          >
-            {i + 1}
-          </button>
-        ))}
-        <button onClick={() => onPage(page + 1)} disabled={page >= pages - 1} className="icon-btn disabled:opacity-30" aria-label="Next page">
-          <ChevronRight className="w-4 h-4" />
-        </button>
-      </div>
-    )}
+    <PageButtons page={page} pages={pages} onPage={onPage} />
   </div>
 );
+
+/** ‹ 1 2 3 › — the page numbers of a list (nothing when there is only one page). */
+export const PageButtons: React.FC<{ page: number; pages: number; onPage: (p: number) => void }> = ({ page, pages, onPage }) =>
+  pages > 1 ? (
+    <div className="flex items-center gap-1">
+      <button onClick={() => onPage(page - 1)} disabled={page === 0} className="icon-btn disabled:opacity-30" aria-label="Previous page">
+        <ChevronLeft className="w-4 h-4" />
+      </button>
+      {Array.from({ length: pages }, (_, i) => (
+        <button
+          key={i}
+          onClick={() => onPage(i)}
+          className={`min-w-[28px] h-7 px-2 rounded-lg num cursor-pointer ${i === page ? 'bg-ink text-white font-semibold' : 'text-ink-2 hover:bg-canvas'}`}
+        >
+          {i + 1}
+        </button>
+      ))}
+      <button onClick={() => onPage(page + 1)} disabled={page >= pages - 1} className="icon-btn disabled:opacity-30" aria-label="Next page">
+        <ChevronRight className="w-4 h-4" />
+      </button>
+    </div>
+  ) : null;
 
 /**
  * Text input with the app's own suggestion dropdown (instead of <datalist>, which the browser

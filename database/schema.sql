@@ -173,6 +173,7 @@ CREATE TABLE IF NOT EXISTS `hotel_payments` (
   `PAY_DATE`      DATE          NOT NULL,
   `AMOUNT`        DECIMAL(12,2) NOT NULL,
   `METHOD`        ENUM('Cash','Bank Transfer','GCash','Credit Card') NOT NULL DEFAULT 'Bank Transfer',
+  `FUND`          ENUM('room','voucher') NOT NULL DEFAULT 'room' COMMENT 'fund it was paid from',
   `REFERENCE`     VARCHAR(100)  NULL,
   `OIC`           VARCHAR(100)  NULL COMMENT 'who handled the payment',
   `REMARKS`       VARCHAR(500)  NULL,

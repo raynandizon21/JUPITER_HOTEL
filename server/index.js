@@ -243,6 +243,7 @@ async function ensureColumns() {
     ['booking_charges', 'IS_FREE', "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1 = complimentary, charged 0' AFTER `UNIT_PRICE`"],
     ['voucher_sale_items', 'IS_FREE', "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1 = complimentary, charged 0' AFTER `UNIT_PRICE`"],
     ['booking_payments', 'RECORDED_AT', "DATETIME NULL COMMENT 'when the payment was first recorded (kept when the list is re-saved)' AFTER `REFERENCE`"],
+    ['hotel_payments', 'FUND', "ENUM('room','voucher') NOT NULL DEFAULT 'room' COMMENT 'fund it was paid from' AFTER `METHOD`"],
     ['hotel_payments', 'RECORDED_AT', "DATETIME NULL COMMENT 'when the payment was first recorded (kept when the list is re-saved)' AFTER `REMARKS`"],
     ['voucher_sale_payments', 'RECORDED_AT', "DATETIME NULL COMMENT 'when the payment was first recorded (kept when the list is re-saved)' AFTER `REFERENCE`"],
   ];
@@ -474,6 +475,7 @@ app.get(
         oic: p.OIC || '',
         remarks: p.REMARKS || '',
         recordedAt: p.RECORDED_AT || '',
+        fund: p.FUND === 'voucher' ? 'voucher' : 'room',
       });
     }
     const settlements = [...months].map(([month, payments]) => ({ month, payments }));
@@ -776,7 +778,7 @@ app.put(
       await conn.query('DELETE FROM hotel_payments WHERE SETTLE_MONTH = ?', [month]);
       if (payments.length) {
         await conn.query(
-          'INSERT INTO hotel_payments (SETTLE_MONTH, PAY_DATE, AMOUNT, METHOD, REFERENCE, OIC, REMARKS, RECORDED_AT, CREATED_BY) VALUES ?',
+          'INSERT INTO hotel_payments (SETTLE_MONTH, PAY_DATE, AMOUNT, METHOD, FUND, REFERENCE, OIC, REMARKS, RECORDED_AT, CREATED_BY) VALUES ?',
           [
             payments.map((p) => {
               const method = methods.includes(p.method) ? p.method : 'Bank Transfer';
@@ -785,6 +787,7 @@ app.put(
                 p.date,
                 Number(p.amount),
                 method,
+                p.fund === 'voucher' ? 'voucher' : 'room',
                 p.reference ? String(p.reference).slice(0, 100) : null,
                 p.oic ? String(p.oic).slice(0, 100) : null,
                 p.remarks ? String(p.remarks).slice(0, 500) : null,

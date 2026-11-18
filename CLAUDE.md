@@ -55,7 +55,7 @@ To check for dead code, run `npx tsc --noEmit --noUnusedLocals --noUnusedParamet
   - total = `amount` (room) + Σ charges;
   - paid = Σ payments;
   - status is **derived**: `paid` / `partial` / `unpaid`. Never store it. `syncStatus` only keeps the legacy `paymentStatus` field in step.
-- **What Jupiter owes the hotel** for a month = the **purchases dated that month** (Hotel Purchases), not what guests were billed. Guest figures on the Dashboard still use the bookings' check-in month (`referenceMonth`).
+- **What Jupiter owes the hotel** for a month = the **purchases dated that month** (Hotel Purchases), not what guests were billed. A payment to the hotel has a **fund** (`hotel_payments.FUND`): room purchases are paid from the Room fund, voucher purchases from the Voucher fund (Pay Hotel Bill → *Pay from*). Guest figures on the Dashboard still use the bookings' check-in month (`referenceMonth`).
 - **Daily Settlement** is a **day-by-day audit** (`bookingDays` / `buildDailyRows` in `DailySettlement.tsx`):
   - *Check-in list* = arrivals that day, plus "+N staying" for guests who arrived earlier and are still in the room;
   - *Total amount* = each booking's value **on that day**: that night's rate (holiday / free nights included), scaled so the nights add up to the booked room amount; extras on their charge date;

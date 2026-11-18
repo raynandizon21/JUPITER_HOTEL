@@ -225,8 +225,16 @@ export const WorkflowPage: React.FC<{
           {
             step: 4,
             ok: hotelDue === 0,
-            title: hotelDue ? (en ? 'Hilton bill open' : '힐튼 미지급') : en ? 'Hilton bill settled' : '힐튼 정산 완료',
-            text: hotelDue ? `${peso(hotelDue)} ${en ? 'due' : '미지급'} · ${formatMonth(month)}` : formatMonth(month),
+            title: hotelDue
+              ? en ? 'Hilton bill open' : '힐튼 미지급'
+              : !purchases.some((p) => p.date.slice(0, 7) === month)
+              ? en ? 'No Hilton bill yet' : '힐튼 청구 없음'
+              : en ? 'Hilton bill settled' : '힐튼 정산 완료',
+            text: hotelDue
+              ? `${peso(hotelDue)} ${en ? 'due' : '미지급'} · ${formatMonth(month)}`
+              : !purchases.some((p) => p.date.slice(0, 7) === month)
+              ? `${formatMonth(month)} · ${en ? 'no purchases recorded' : '구매 기록 없음'}`
+              : formatMonth(month),
           },
         ];
         return (

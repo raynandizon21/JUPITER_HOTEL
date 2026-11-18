@@ -173,6 +173,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
   const [exporting, setExporting] = useState(false);
 
   const rows = useMemo(() => buildDailyRowsFor(reservations, dates, voucherSales, casinoRates), [reservations, dates, voucherSales, casinoRates]);
+
   // each booking's value per day (used by the day pop-up's "This day" column)
   const dayShares = useMemo(() => new Map(reservations.map((r) => [r.id, bookingDays(r, casinoRates)])), [reservations, casinoRates]);
 

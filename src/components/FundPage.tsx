@@ -111,7 +111,7 @@ export function buildFundEntries(
       out.push({
         key: `hp-${s.month}-${p.id}`,
         date: p.date,
-        fund: 'room',
+        fund: p.fund === 'voucher' ? 'voucher' : 'room',
         dir: 'out',
         amount: p.amount,
         method: p.method,

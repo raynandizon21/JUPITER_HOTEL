@@ -1,14 +1,14 @@
 import React, { useState, useMemo } from 'react';
-import { DailySettlement } from './DailySettlement';
+import { DailySettlement, bookingDays } from './DailySettlement';
 import { Reservation, CasinoRatesConfig, Settlement, PaymentMethod, FolioPayment, VoucherSale, HotelPurchase } from '../types/hotel';
 import { itemLabel, purchaseTotal } from '../utils/inventory';
-import { folioOf, settlementOf, PAYMENT_METHODS, uid, nowStamp, todayISO, printDocument, escapeHtml as esc } from '../utils/billing';
+import { folioOf, voucherTotals, settlementOf, PAYMENT_METHODS, uid, nowStamp, todayISO, printDocument, escapeHtml as esc } from '../utils/billing';
 import { GuestFolio } from './GuestFolio';
 import { exportSettlementExcel } from '../utils/excelExport';
-import { formatCurrency, calculateCasinoStayPrice, formatLongDate, formatMonth, formatDateRange, nightsLabel } from '../utils/hotelHelpers';
-import { FileSpreadsheet, AlertTriangle, CheckCircle2, ArrowUpRight, Printer, Wallet, Scale, Landmark, Plus, Pencil, Trash2, Receipt, Users, History } from 'lucide-react';
+import { getDaysInMonth, getStayNights, formatCurrency, calculateCasinoStayPrice, formatLongDate, formatMonth, formatDateRange, nightsLabel } from '../utils/hotelHelpers';
+import { FileSpreadsheet, CheckCircle2, ArrowUpRight, Printer, Wallet, Scale, Landmark, Plus, Pencil, Trash2, Receipt, Users, History, BedDouble, Ticket, ShoppingCart } from 'lucide-react';
 import { Language } from '../i18n/translations';
-import { PageHeader, Dialog, ConfirmDialog, MonthSelect, MONTHS, RowMenu, toast, ComboInput, Select } from './ui';
+import { PageButtons, PageHeader, Dialog, ConfirmDialog, MonthSelect, MONTHS, RowMenu, toast, ComboInput, Select } from './ui';
 
 interface DailyDashboardProps {
   reservations: Reservation[];
@@ -73,6 +73,57 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
   const monthRes = useMemo(() => reservations.filter((r) => r.referenceMonth === month), [reservations, month]);
   const hotelPays = settlementOf(settlements, month).payments;
   const monthPurchases = useMemo(() => purchases.filter((p) => p.date.slice(0, 7) === month), [purchases, month]);
+  // Guest money this month — the SAME rule as the Daily Settlement table, so every number tallies:
+  // a booking counts only its nights (and extras) that fall in this month, its payments covering the
+  // earliest days first; vouchers-only sales count by their sale date.
+  const guestMoney = useMemo(() => {
+    const days = new Set(getDaysInMonth(month));
+    const statusOf = (total: number, paid: number) => (total - paid <= 0 ? 'paid' : paid > 0 ? 'partial' : 'unpaid') as 'paid' | 'partial' | 'unpaid';
+    const rooms = reservations
+      .map((r) => {
+        let total = 0;
+        let paid = 0;
+        bookingDays(r, casinoRates).forEach((sh, d) => {
+          if (!days.has(d)) return;
+          total += sh.total;
+          paid += sh.paid;
+        });
+        const nights = getStayNights(r.checkIn, r.checkOut).filter((d) => days.has(d)).length;
+        return { id: r.id, kind: 'room' as const, name: r.guestName, agent: r.agentName || '', res: r as Reservation | undefined, vs: undefined as VoucherSale | undefined, pays: r.payments || [], nights, total, paid, balance: total - paid, status: statusOf(total, paid) };
+      })
+      .filter((x) => x.total > 0 || x.nights > 0);
+    const vouchers = voucherSales
+      .filter((v) => days.has(v.date))
+      .map((v) => {
+        const t = voucherTotals(v);
+        return { id: v.id, kind: 'voucher' as const, name: v.guestName, agent: v.agentName || '', res: undefined as Reservation | undefined, vs: v as VoucherSale | undefined, pays: v.payments, nights: 0, total: t.total, paid: t.paid, balance: t.balance, status: t.status };
+      });
+    const sum = (list: { total: number; paid: number }[]) => ({
+      count: list.length,
+      billed: list.reduce((a, x) => a + x.total, 0),
+      paid: list.reduce((a, x) => a + x.paid, 0),
+    });
+    const r = sum(rooms);
+    const v = sum(vouchers);
+    return {
+      rooms: { ...r, unpaid: Math.max(r.billed - r.paid, 0) },
+      vouchers: { ...v, unpaid: Math.max(v.billed - v.paid, 0) },
+      owing: [...rooms, ...vouchers].filter((x) => x.balance > 0).sort((a, b) => b.balance - a.balance),
+      received: [...rooms, ...vouchers].filter((x) => x.paid > 0).sort((a, b) => b.paid - a.paid),
+    };
+  }, [reservations, voucherSales, month, casinoRates]);
+  const [showGuestMoney, setShowGuestMoney] = useState(false);
+  const [owingTab, setOwingTab] = useState<'room' | 'voucher'>('room');
+  const [owingPage, setOwingPage] = useState(0);
+  const OWING_PAGE = 10;
+  // Guest payments received → who paid (its own pop-up, separate from the unpaid one)
+  const [receivedTab, setReceivedTab] = useState<'room' | 'voucher' | null>(null);
+  const [receivedPage, setReceivedPage] = useState(0);
+  const openGuestMoney = (tab: 'room' | 'voucher') => {
+    setOwingTab(tab);
+    setOwingPage(0);
+    setShowGuestMoney(true);
+  };
   const s = useMemo(() => summarize(monthRes, settlementOf(settlements, month).paid, monthPurchases), [monthRes, settlements, month, monthPurchases]);
 
   const history = useMemo(() => {
@@ -92,10 +143,18 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
   const [payOpen, setPayOpen] = useState(false);
   const [payDate, setPayDate] = useState(todayISO());
   const [payAmount, setPayAmount] = useState(0);
-  const [payMethod, setPayMethod] = useState<PaymentMethod>('Bank Transfer');
+  const [payMethod, setPayMethod] = useState<PaymentMethod>('Cash');
   const [payRef, setPayRef] = useState('');
   const [payOic, setPayOic] = useState('');
   const [payRemarks, setPayRemarks] = useState('');
+  const [payFund, setPayFund] = useState<'room' | 'voucher'>('room');
+  const [showHotelBill, setShowHotelBill] = useState(false);
+  // the month's hotel bill split by fund: room purchases are paid from the Room fund, voucher purchases from the Voucher fund
+  const fundBill = { room: 0, voucher: 0 };
+  monthPurchases.forEach((p) => p.items.forEach((i) => (fundBill[i.kind] += i.qty * i.unitCost)));
+  const fundPaid = { room: 0, voucher: 0 };
+  hotelPays.forEach((p) => (fundPaid[p.fund === 'voucher' ? 'voucher' : 'room'] += p.amount));
+  const fundDue = { room: Math.max(fundBill.room - fundPaid.room, 0), voucher: Math.max(fundBill.voucher - fundPaid.voucher, 0) };
   // payment being edited (null = adding a new one)
   const [editingPay, setEditingPay] = useState<FolioPayment | null>(null);
   React.useEffect(() => {
@@ -107,8 +166,12 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
       setPayRef(editingPay.reference || '');
       setPayOic(editingPay.oic || '');
       setPayRemarks(editingPay.remarks || '');
+      setPayFund(editingPay.fund === 'voucher' ? 'voucher' : 'room');
     } else {
-      setPayAmount(s.balance);
+      setPayMethod('Cash');
+      const f = fundDue.room > 0 || fundDue.voucher <= 0 ? 'room' : 'voucher';
+      setPayFund(f);
+      setPayAmount(fundDue[f]);
       setPayDate(todayISO());
       setPayRef('');
       setPayOic('');
@@ -118,7 +181,11 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
   }, [payOpen]);
 
   // Most this payment can be: what is still unpaid, plus (when editing) this payment's own old amount.
-  const maxPay = editingPay ? Math.max(s.billed - (s.settled - editingPay.amount), 0) : s.balance;
+  // per fund: that fund's part of the bill, minus what it already paid (when editing, not counting this payment)
+  const maxPay = Math.max(
+    fundBill[payFund] - (fundPaid[payFund] - (editingPay && (editingPay.fund === 'voucher' ? 'voucher' : 'room') === payFund ? editingPay.amount : 0)),
+    0
+  );
   const overPay = payAmount > maxPay;
 
   const editHotelPayment = (p: FolioPayment) => {
@@ -127,7 +194,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
   };
 
   // Edit and delete both ask for confirmation first.
-  const [confirmPay, setConfirmPay] = useState<{ kind: 'edit' | 'delete'; pay: FolioPayment } | null>(null);
+  const [confirmPay, setConfirmPay] = useState<{ kind: 'add' | 'edit' | 'delete'; pay: FolioPayment } | null>(null);
 
   const addHotelPayment = () => {
     if (payAmount <= 0 || overPay) return;
@@ -135,7 +202,10 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
       setConfirmPay({ kind: 'edit', pay: editingPay });
       return;
     }
-    const p: FolioPayment = { id: uid(), date: payDate, amount: payAmount, method: payMethod, reference: payRef.trim(), oic: payOic.trim(), remarks: payRemarks.trim(), recordedAt: nowStamp() };
+    const p: FolioPayment = { id: uid(), date: payDate, amount: payAmount, method: payMethod, fund: payFund, reference: payRef.trim(), oic: payOic.trim(), remarks: payRemarks.trim(), recordedAt: nowStamp() };
+    setConfirmPay({ kind: 'add', pay: p }); // saved after the staff confirm
+  };
+  const commitHotelPayment = (p: FolioPayment) => {
     setSettlements((prev) => {
       const exists = prev.some((x) => x.month === month);
       return exists ? prev.map((x) => (x.month === month ? { ...x, payments: [...x.payments, p] } : x)) : [...prev, { month, payments: [p] }];
@@ -148,7 +218,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
     );
   };
   const saveEditedPayment = (old: FolioPayment) => {
-    const updated: FolioPayment = { ...old, date: payDate, amount: payAmount, method: payMethod, reference: payRef.trim(), oic: payOic.trim(), remarks: payRemarks.trim() };
+    const updated: FolioPayment = { ...old, date: payDate, amount: payAmount, method: payMethod, fund: payFund, reference: payRef.trim(), oic: payOic.trim(), remarks: payRemarks.trim() };
     setSettlements((prev) => prev.map((x) => (x.month === month ? { ...x, payments: x.payments.map((p) => (p.id === updated.id ? updated : p)) } : x)));
     setPayOpen(false);
     toast(en ? 'Payment to hotel updated' : '호텔 지급 수정됨', `${php(updated.amount)} · ${formatMonth(month)}`);
@@ -263,11 +333,65 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
           pill={`${s.purchases} ${en ? (s.purchases === 1 ? 'purchase' : 'purchases') : '건'}`}
           tone="neutral"
           color="blue"
-          onClick={onOpenInventory}
+          onClick={() => setShowHotelBill(true)}
         />
-        <StatCard Icon={Landmark} label={en ? 'Paid to hotel' : '호텔 지급액'} value={php(s.settled)} pill={`${s.pct}%`} tone="ok" color="green" />
-        <StatCard Icon={AlertTriangle} label={en ? 'Balance due to hotel' : '호텔 미지급 잔액'} value={php(s.balance)} pill={s.balance > 0 ? (en ? 'Open' : '미정산') : en ? 'Settled' : '정산 완료'} tone={s.balance > 0 ? 'bad' : 'ok'} color={s.balance > 0 ? 'red' : 'green'} />
-        <StatCard Icon={Users} label={en ? 'Guest payments received' : '손님 결제 수령액'} value={php(s.guestPaid)} pill={`${php(s.guestBalance)} ${en ? 'unpaid' : '미결제'}`} tone={s.guestBalance > 0 ? 'warn' : 'ok'} color="amber" />
+        {/* paid to the hotel + what is still due, in one card */}
+        <StatCard
+          Icon={Landmark}
+          label={en ? 'Paid to hotel' : '호텔 지급액'}
+          hint={
+            s.billed === 0 && s.settled === 0
+              ? en ? 'No hotel bill yet' : '호텔 청구 없음'
+              : `${en ? 'Balance due' : '잔액'} ${php(s.balance)}`
+          }
+          value={php(s.settled)}
+          pill={s.balance > 0 ? (en ? 'Open' : '미정산') : s.billed === 0 && s.settled === 0 ? (en ? 'No bill yet' : '청구 없음') : en ? 'Settled' : '정산 완료'}
+          tone={s.balance > 0 ? 'bad' : s.billed === 0 && s.settled === 0 ? 'warn' : 'ok'}
+          color={s.balance > 0 ? 'red' : 'green'}
+          onClick={() => setShowHotelBill(true)}
+        />
+        {(() => {
+          const billed = guestMoney.rooms.billed + guestMoney.vouchers.billed;
+          const received = guestMoney.rooms.paid + guestMoney.vouchers.paid;
+          const unpaidTotal = guestMoney.rooms.unpaid + guestMoney.vouchers.unpaid;
+          return (
+            <>
+              <StatCard
+                Icon={Users}
+                label={en ? 'Guest payments received' : '손님 결제 수령액'}
+                hint={en ? `of ${php(billed)} for this month's nights & vouchers` : `이 달 숙박·바우처 ${php(billed)} 중`}
+                value={php(received)}
+                pill={`${billed ? Math.round((received / billed) * 100) : 0}% ${en ? 'collected' : '수금'}`}
+                tone="ok"
+                color="green"
+                onClick={() => {
+                  setReceivedTab(guestMoney.rooms.paid || !guestMoney.vouchers.paid ? 'room' : 'voucher');
+                  setReceivedPage(0);
+                }}
+              />
+              <StatCard
+                Icon={Receipt}
+                label={en ? 'Unpaid by guests' : '손님 미결제'}
+                hint={
+                  <>
+                    <span className="block whitespace-nowrap">
+                      {en ? 'Rooms' : '객실'} <span className="num font-semibold text-bad">{php(guestMoney.rooms.unpaid)}</span>
+                    </span>
+                    <span className="block whitespace-nowrap">
+                      {en ? 'Voucher' : '바우처'} <span className="num font-semibold text-bad">{php(guestMoney.vouchers.unpaid)}</span>
+                    </span>
+                  </>
+                }
+                value={php(unpaidTotal)}
+                valueClass={unpaidTotal > 0 ? 'text-bad' : 'text-ok'}
+                pill={`${guestMoney.owing.length} ${en ? (guestMoney.owing.length === 1 ? 'guest' : 'guests') : '명'}`}
+                tone={unpaidTotal > 0 ? 'bad' : 'ok'}
+                color={unpaidTotal > 0 ? 'red' : 'green'}
+                onClick={() => openGuestMoney(guestMoney.rooms.unpaid || !guestMoney.vouchers.unpaid ? 'room' : 'voucher')}
+              />
+            </>
+          );
+        })()}
         <StatCard
           Icon={Scale}
           label={en ? 'Rate difference' : '요금 차이'}
@@ -322,6 +446,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
                       {p.method}
                       {p.reference && ` · ${p.reference}`}
                       {p.oic && ` · OIC ${p.oic}`}
+                      {` · ${p.fund === 'voucher' ? (en ? 'Voucher fund' : '바우처 자금') : en ? 'Room fund' : '객실 자금'}`}
                     </div>
                     {p.remarks && <div className="text-[11.5px] text-ink-2 truncate">{p.remarks}</div>}
                   </div>
@@ -412,8 +537,15 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
                   <td className="r num text-ok font-semibold bg-ok-soft/30">{h.settled ? php(h.settled) : <Dim />}</td>
                   <td className="r num bg-bad-soft/30">{h.balance ? <span className="text-bad font-semibold">{php(h.balance)}</span> : <Dim />}</td>
                   <td className="c">
-                    {h.count === 0 && h.billed === 0 && h.settled === 0 ? (
-                      <span className="badge badge-neutral">{en ? 'No activity' : '내역 없음'}</span>
+                    {h.billed === 0 && h.settled === 0 ? (
+                      // nothing bought from the hotel this month: not "settled" — there is no bill yet
+                      h.count > 0 ? (
+                        <span className="badge badge-warn badge-dot" title={en ? 'Guests stayed, but no purchase from the hotel is recorded for this month' : '손님 숙박은 있으나 이 달 호텔 구매가 없습니다'}>
+                          {en ? 'No hotel bill' : '호텔 청구 없음'}
+                        </span>
+                      ) : (
+                        <span className="badge badge-neutral">{en ? 'No activity' : '내역 없음'}</span>
+                      )
                     ) : h.balance <= 0 ? (
                       <span className="badge badge-ok badge-dot">{en ? 'Settled' : '정산 완료'}</span>
                     ) : (
@@ -426,6 +558,274 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
           </table>
         </div>
       </div>
+
+      {/* Hotel Bill / Paid to hotel → how much of the month's hotel bill is paid, per fund */}
+      {showHotelBill && (
+        <Dialog
+          width="max-w-xl"
+          onClose={() => setShowHotelBill(false)}
+          title={en ? `Hotel bill · ${formatMonth(month)}` : `호텔 청구 · ${formatMonth(month)}`}
+          subtitle={en ? "How much of this month's hotel bill is paid, per fund" : '이 달 호텔 청구액의 자금별 지급 현황'}
+        >
+          <div className="px-6 py-4 grid gap-4">
+            <table className="dtable compact">
+              <thead>
+                <tr>
+                  <th>{en ? 'Fund' : '자금'}</th>
+                  <th className="r">{en ? 'Hotel bill' : '청구액'}</th>
+                  <th className="r">{en ? 'Paid' : '지급액'}</th>
+                  <th className="r">{en ? 'Balance' : '잔액'}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(
+                  [
+                    ['room', BedDouble, en ? 'Room fund' : '객실 자금', 'text-accent'],
+                    ['voucher', Ticket, en ? 'Voucher fund' : '바우처 자금', 'text-warn'],
+                  ] as const
+                ).map(([k, Icon, label, tone]) => (
+                  <tr key={k}>
+                    <td>
+                      <span className={`inline-flex items-center gap-2 font-medium ${tone}`}>
+                        <Icon className="w-4 h-4" />
+                        {label}
+                      </span>
+                    </td>
+                    <td className="r num">{php(fundBill[k])}</td>
+                    <td className="r num text-ok">{php(fundPaid[k])}</td>
+                    <td className={`r num font-semibold ${fundDue[k] > 0 ? 'text-bad' : 'text-muted'}`}>{php(fundDue[k])}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td>{en ? 'Total' : '합계'}</td>
+                  <td className="r num">{php(s.billed)}</td>
+                  <td className="r num text-ok">{php(s.settled)}</td>
+                  <td className="r num text-bad">{php(s.balance)}</td>
+                </tr>
+              </tfoot>
+            </table>
+
+          </div>
+          <div className="px-6 py-3 border-t border-line bg-sunken flex justify-end gap-2">
+            <button onClick={() => setShowHotelBill(false)} className="btn btn-ghost">
+              {en ? 'Close' : '닫기'}
+            </button>
+            <button
+              onClick={() => {
+                setShowHotelBill(false);
+                onOpenInventory();
+              }}
+              className="btn btn-outline"
+            >
+              <ShoppingCart className="w-4 h-4" />
+              {en ? 'Hotel Purchases' : '호텔 구매'}
+            </button>
+            <button
+              onClick={() => {
+                setShowHotelBill(false);
+                setPayOpen(true);
+              }}
+              disabled={s.balance <= 0}
+              className="btn btn-primary"
+            >
+              <Landmark className="w-4 h-4" />
+              {en ? 'Pay Hotel Bill' : '호텔 청구 지급'}
+            </button>
+          </div>
+        </Dialog>
+      )}
+
+      {receivedTab && (
+        <Dialog
+          width="max-w-6xl"
+          onClose={() => setReceivedTab(null)}
+          title={en ? `Payments received · ${formatMonth(month)}` : `결제 수령 · ${formatMonth(month)}`}
+          subtitle={en ? 'Nights in this month and vouchers-only sales dated this month — same as Daily Settlement' : '이 달 숙박분과 이 달 바우처 단독 판매 — 일일 정산과 동일'}
+        >
+          {(() => {
+            const list = guestMoney.received.filter((x) => x.kind === receivedTab);
+            const pages = Math.max(1, Math.ceil(list.length / OWING_PAGE));
+            const cur = Math.min(receivedPage, pages - 1);
+            const rows = list.slice(cur * OWING_PAGE, cur * OWING_PAGE + OWING_PAGE);
+            return (
+              <div>
+                <div className="flex items-end gap-1 px-5 pt-2 border-b border-line" role="tablist">
+                  {(
+                    [
+                      ['room', BedDouble, en ? 'Room bookings' : '객실 예약', guestMoney.rooms.paid, 'text-accent', 'border-accent', 'bg-accent text-white'],
+                      ['voucher', Ticket, en ? 'Vouchers only' : '바우처만', guestMoney.vouchers.paid, 'text-warn', 'border-warn', 'bg-warn text-white'],
+                    ] as const
+                  ).map(([k, Icon, label, total, icon, line, chip]) => (
+                    <button
+                      key={k}
+                      role="tab"
+                      aria-selected={receivedTab === k}
+                      onClick={() => {
+                        setReceivedTab(k);
+                        setReceivedPage(0);
+                      }}
+                      className={`-mb-px flex items-center gap-2 px-3 py-2.5 text-[12.5px] font-medium border-b-2 cursor-pointer transition-colors ${
+                        receivedTab === k ? `${line} text-ink` : 'border-transparent text-muted hover:text-ink-2'
+                      }`}
+                    >
+                      <Icon className={`w-4 h-4 ${icon}`} strokeWidth={1.75} />
+                      {label}
+                      <span className={`num text-[11px] px-1.5 h-5 min-w-5 inline-grid place-items-center rounded-full ${receivedTab === k ? chip : 'bg-canvas text-muted'}`}>
+                        {guestMoney.received.filter((x) => x.kind === k).length}
+                      </span>
+                      <span className="num text-[11.5px] text-ok">{php(total)}</span>
+                    </button>
+                  ))}
+                </div>
+                {list.length === 0 ? (
+                  <div className="px-5 py-8 text-[12.5px] text-muted text-center">{en ? 'No payments received yet' : '수령한 결제가 없습니다'}</div>
+                ) : (
+                  <GuestMoneyTable
+                    rows={rows}
+                    all={list}
+                    kind={receivedTab}
+                    en={en}
+                    onOpen={(id) => {
+                      setReceivedTab(null);
+                      setFolioId(id);
+                    }}
+                  />
+                )}
+                <div className="flex items-center justify-between gap-2 px-5 py-3 border-t border-line bg-sunken text-[11.5px] text-muted">
+                  <span className="num">{list.length ? `${cur * OWING_PAGE + 1}–${Math.min((cur + 1) * OWING_PAGE, list.length)} ${en ? 'of' : '/'} ${list.length}` : ''}</span>
+                  <span className="flex items-center gap-1">
+                    <PageButtons page={cur} pages={pages} onPage={setReceivedPage} />
+                    <button onClick={() => setReceivedTab(null)} className="btn btn-primary btn-sm ml-2">
+                      {en ? 'Close' : '닫기'}
+                    </button>
+                  </span>
+                </div>
+              </div>
+            );
+          })()}
+        </Dialog>
+      )}
+
+      {showGuestMoney && (
+        <Dialog
+          width="max-w-6xl"
+          onClose={() => setShowGuestMoney(false)}
+          title={en ? `Guest payments · ${formatMonth(month)}` : `손님 결제 · ${formatMonth(month)}`}
+          subtitle={en ? 'Nights in this month and vouchers-only sales dated this month — same as Daily Settlement' : '이 달 숙박분과 이 달 바우처 단독 판매 — 일일 정산과 동일'}
+        >
+          <div className="px-6 py-3 grid gap-3">
+            <table className="dtable compact">
+              <thead>
+                <tr>
+                  <th>{en ? 'Type' : '구분'}</th>
+                  <th className="c">{en ? 'Count' : '건수'}</th>
+                  <th className="r">{en ? 'Billed' : '청구액'}</th>
+                  <th className="r">{en ? 'Received' : '수령액'}</th>
+                  <th className="r">{en ? 'Unpaid' : '미결제'}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(
+                  [
+                    [BedDouble, en ? 'Room bookings' : '객실 예약', guestMoney.rooms, 'text-accent'],
+                    [Ticket, en ? 'Vouchers only' : '바우처만', guestMoney.vouchers, 'text-warn'],
+                  ] as const
+                ).map(([Icon, label, x, tone]) => (
+                  <tr key={label}>
+                    <td>
+                      <span className={`inline-flex items-center gap-2 font-medium ${tone}`}>
+                        <Icon className="w-4 h-4" />
+                        {label}
+                      </span>
+                    </td>
+                    <td className="c num">{x.count}</td>
+                    <td className="r num">{php(x.billed)}</td>
+                    <td className="r num text-ok">{php(x.paid)}</td>
+                    <td className={`r num font-semibold ${x.unpaid > 0 ? 'text-bad' : 'text-muted'}`}>{php(x.unpaid)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td>{en ? 'Total' : '합계'}</td>
+                  <td className="c num">{guestMoney.rooms.count + guestMoney.vouchers.count}</td>
+                  <td className="r num">{php(guestMoney.rooms.billed + guestMoney.vouchers.billed)}</td>
+                  <td className="r num text-ok">{php(guestMoney.rooms.paid + guestMoney.vouchers.paid)}</td>
+                  <td className="r num text-bad">{php(guestMoney.rooms.unpaid + guestMoney.vouchers.unpaid)}</td>
+                </tr>
+              </tfoot>
+            </table>
+
+            {/* unpaid guests, one tab per type, paged (no scrolling) */}
+            {(() => {
+              const list = guestMoney.owing.filter((x) => x.kind === owingTab);
+              const pages = Math.max(1, Math.ceil(list.length / OWING_PAGE));
+              const cur = Math.min(owingPage, pages - 1);
+              const rows = list.slice(cur * OWING_PAGE, cur * OWING_PAGE + OWING_PAGE);
+              return (
+                <div className="rounded-xl border border-line overflow-hidden">
+                  <div className="flex items-end gap-1 px-3 pt-1.5 border-b border-line" role="tablist">
+                    {(
+                      [
+                        ['room', BedDouble, en ? 'Room bookings' : '객실 예약', 'text-accent', 'border-accent', 'bg-accent text-white'],
+                        ['voucher', Ticket, en ? 'Vouchers only' : '바우처만', 'text-warn', 'border-warn', 'bg-warn text-white'],
+                      ] as const
+                    ).map(([k, Icon, label, icon, line, chip]) => {
+                      const n = guestMoney.owing.filter((x) => x.kind === k).length;
+                      return (
+                        <button
+                          key={k}
+                          role="tab"
+                          aria-selected={owingTab === k}
+                          onClick={() => {
+                            setOwingTab(k);
+                            setOwingPage(0);
+                          }}
+                          className={`-mb-px flex items-center gap-2 px-3 py-2 text-[12.5px] font-medium border-b-2 cursor-pointer transition-colors ${
+                            owingTab === k ? `${line} text-ink` : 'border-transparent text-muted hover:text-ink-2'
+                          }`}
+                        >
+                          <Icon className={`w-4 h-4 ${icon}`} strokeWidth={1.75} />
+                          {label}
+                          <span className={`num text-[11px] px-1.5 h-5 min-w-5 inline-grid place-items-center rounded-full ${owingTab === k ? chip : 'bg-canvas text-muted'}`}>{n}</span>
+                        </button>
+                      );
+                    })}
+                    <span className="ml-auto mb-2 text-[11px] text-muted">{en ? 'Unpaid' : '미결제'}</span>
+                  </div>
+                  {list.length === 0 ? (
+                    <div className="px-4 py-6 text-[12.5px] text-ok flex items-center justify-center gap-2">
+                      <CheckCircle2 className="w-4 h-4" />
+                      {en ? 'Everyone has paid' : '모두 결제 완료'}
+                    </div>
+                  ) : (
+                    <GuestMoneyTable
+                      rows={rows}
+                      all={list}
+                      kind={owingTab}
+                      en={en}
+                      onOpen={(id) => {
+                        setShowGuestMoney(false);
+                        setFolioId(id);
+                      }}
+                    />
+                  )}
+                  {pages > 1 && (
+                    <div className="flex items-center justify-between px-3.5 py-2 border-t border-line bg-sunken text-[11.5px] text-muted">
+                      <span className="num">
+                        {cur * OWING_PAGE + 1}–{Math.min((cur + 1) * OWING_PAGE, list.length)} {en ? 'of' : '/'} {list.length}
+                      </span>
+                      <PageButtons page={cur} pages={pages} onPage={setOwingPage} />
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+        </Dialog>
+      )}
 
       {showAudit && (
         <Dialog
@@ -487,6 +887,42 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
           subtitle={`${formatMonth(month)} · ${en ? 'balance' : '잔액'} ${php(s.balance)}`}
         >
           <div className="px-6 py-5 grid grid-cols-2 gap-4">
+            <div className="col-span-2">
+              <label className="field-label">{en ? 'Pay from' : '지급 자금'}</label>
+              <div className="grid grid-cols-2 gap-2">
+                {(
+                  [
+                    ['room', BedDouble, en ? 'Room fund' : '객실 자금', 'border-accent bg-accent-soft text-accent', 'ring-2 ring-accent/20'],
+                    ['voucher', Ticket, en ? 'Voucher fund' : '바우처 자금', 'border-warn bg-warn-soft text-warn', 'ring-2 ring-warn/20'],
+                  ] as const
+                ).map(([k, Icon, label, on, ring]) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => {
+                      setPayFund(k);
+                      if (!editingPay) setPayAmount(fundDue[k]);
+                    }}
+                    className={`relative text-left rounded-xl border-2 px-3.5 py-2.5 cursor-pointer transition-colors ${
+                      payFund === k ? `${on} ${ring}` : 'border-line bg-surface text-ink-2 hover:border-line-strong'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2 text-[13px] font-semibold">
+                      <Icon className="w-4 h-4" />
+                      {label}
+                      {payFund === k && <CheckCircle2 className="w-4 h-4 ml-auto" />}
+                    </span>
+                    <span className="block mt-1 text-[11px] text-muted">{en ? 'Due' : '미지급'}</span>
+                    <span className={`block num text-[17px] font-bold leading-tight ${fundDue[k] > 0 ? 'text-bad' : 'text-ok'}`}>{php(fundDue[k])}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="text-[11px] text-muted mt-1">
+                {en
+                  ? `Room purchases ${php(fundBill.room)} are paid from the Room fund, voucher purchases ${php(fundBill.voucher)} from the Voucher fund.`
+                  : `객실 구매 ${php(fundBill.room)}는 객실 자금, 바우처 구매 ${php(fundBill.voucher)}는 바우처 자금에서 지급합니다.`}
+              </div>
+            </div>
             <div>
               <label className="field-label">{en ? 'Date paid' : '지급일'}</label>
               <input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} className="input" />
@@ -494,7 +930,8 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
             <div>
               <label className="field-label">{en ? 'Method' : '지급 수단'}</label>
               <Select value={payMethod} onChange={(e) => setPayMethod(e.target.value as PaymentMethod)} className="input">
-                {PAYMENT_METHODS.filter((m) => m !== 'Junket Account').map((m) => (
+                {/* Cash only for now; an old payment made another way still shows its method so it can be changed */}
+                {PAYMENT_METHODS.filter((m) => m === 'Cash' || (editingPay && m === editingPay.method)).map((m) => (
                   <option key={m}>{m}</option>
                 ))}
               </Select>
@@ -567,10 +1004,34 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
           title={
             confirmPay.kind === 'delete'
               ? en ? 'Delete payment to hotel?' : '호텔 지급을 삭제하시겠습니까?'
+              : confirmPay.kind === 'add'
+              ? en ? 'Confirm payment to the hotel' : '호텔 지급 확인'
               : en ? 'Save changes?' : '변경 사항을 저장하시겠습니까?'
           }
           message={
-            confirmPay.kind === 'delete' ? (
+            confirmPay.kind === 'add' ? (
+              <div className="grid gap-1.5">
+                {(
+                  [
+                    [en ? 'Pay from' : '지급 자금', confirmPay.pay.fund === 'voucher' ? (en ? 'Voucher fund' : '바우처 자금') : en ? 'Room fund' : '객실 자금'],
+                    [en ? 'Amount' : '금액', php(confirmPay.pay.amount)],
+                    [en ? 'Method' : '지급 수단', confirmPay.pay.method],
+                    [en ? 'Date paid' : '지급일', formatLongDate(confirmPay.pay.date)],
+                    [en ? 'Month' : '정산 월', formatMonth(month)],
+                    ...(confirmPay.pay.reference ? [[en ? 'Reference' : '참조 번호', confirmPay.pay.reference]] : []),
+                    ...(confirmPay.pay.oic ? [['OIC', confirmPay.pay.oic]] : []),
+                  ] as [string, string][]
+                ).map(([k, v]) => (
+                  <div key={k} className="flex justify-between gap-4">
+                    <span className="text-muted">{k}</span>
+                    <b className={`text-ink text-right ${k === (en ? 'Amount' : '금액') ? 'num text-[15px]' : ''}`}>{v}</b>
+                  </div>
+                ))}
+                <div className="mt-1 text-[12px] text-muted">
+                  {en ? 'This comes out of the fund above in the Fund page.' : '자금 페이지에서 위 자금이 출금됩니다.'}
+                </div>
+              </div>
+            ) : confirmPay.kind === 'delete' ? (
               <>
                 <b className="text-ink">{php(confirmPay.pay.amount)}</b> · {formatLongDate(confirmPay.pay.date)} · {confirmPay.pay.method}
                 {confirmPay.pay.reference && ` · ${confirmPay.pay.reference}`}
@@ -585,11 +1046,12 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
               </>
             )
           }
-          confirmLabel={confirmPay.kind === 'delete' ? (en ? 'Delete' : '삭제') : en ? 'Save' : '저장'}
+          confirmLabel={confirmPay.kind === 'delete' ? (en ? 'Delete' : '삭제') : confirmPay.kind === 'add' ? (en ? 'Confirm payment' : '지급 확인') : en ? 'Save' : '저장'}
           cancelLabel={en ? 'Cancel' : '취소'}
           onCancel={() => setConfirmPay(null)}
           onConfirm={() => {
             if (confirmPay.kind === 'delete') removeHotelPayment(confirmPay.pay.id);
+            else if (confirmPay.kind === 'add') commitHotelPayment(confirmPay.pay);
             else saveEditedPayment(confirmPay.pay);
             setConfirmPay(null);
           }}
@@ -609,6 +1071,102 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
     </div>
   );
 };
+
+type GuestMoneyRow = {
+  id: string;
+  kind: 'room' | 'voucher';
+  name: string;
+  agent: string;
+  res?: Reservation;
+  vs?: VoucherSale;
+  pays: FolioPayment[];
+  total: number;
+  paid: number;
+  balance: number;
+  status: 'paid' | 'partial' | 'unpaid';
+  /** nights of the stay inside this month */
+  nights: number;
+};
+
+/** Guest rows in the Guest payments pop-ups, laid out like the Guest Ledger table. Room rows open Billing. */
+const GuestMoneyTable: React.FC<{ rows: GuestMoneyRow[]; all: GuestMoneyRow[]; kind: 'room' | 'voucher'; en: boolean; onOpen: (id: string) => void }> = ({ rows, all, kind, en, onOpen }) => (
+  <table className="dtable compact">
+    <thead>
+      <tr>
+        <th>{en ? 'Guest name' : '손님 이름'}</th>
+        {kind === 'room' ? (
+          <>
+            <th>{en ? 'Room type' : '객실 타입'}</th>
+            <th>{en ? 'Stay' : '숙박 기간'}</th>
+            <th className="c">{en ? 'Nights' : '박수'}</th>
+          </>
+        ) : (
+          <>
+            <th>{en ? 'Vouchers' : '바우처'}</th>
+            <th>{en ? 'Date' : '날짜'}</th>
+          </>
+        )}
+        <th className="r">{en ? 'Total' : '합계'}</th>
+        <th className="r">{en ? 'Paid' : '결제액'}</th>
+        <th className="r">{en ? 'Balance' : '잔액'}</th>
+        <th>{en ? 'Payment' : '결제'}</th>
+        <th className="c">{en ? 'Status' : '상태'}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {rows.map((x) => {
+        const last = x.pays.slice().sort((a, b) => b.date.localeCompare(a.date))[0];
+        const methods = Array.from(new Set(x.pays.map((p) => p.method))).join(', ');
+        return (
+          <tr key={x.id} onClick={x.res ? () => onOpen(x.id) : undefined} className={x.res ? 'cursor-pointer' : ''}>
+            <td className="leading-tight">
+              <div className="font-medium text-ink whitespace-nowrap">{x.name}</div>
+              {x.agent && <div className="text-[11px] text-muted whitespace-nowrap">{en ? 'Agent' : '에이전트'} · {x.agent}</div>}
+            </td>
+            {x.res ? (
+              <>
+                <td className="whitespace-nowrap text-ink-2">{x.res.roomType}</td>
+                <td className="whitespace-nowrap text-ink-2">{formatDateRange(x.res.checkIn, x.res.checkOut)}</td>
+                <td className="c num">{x.nights}</td>
+              </>
+            ) : (
+              <>
+                <td className="text-ink-2">{x.vs?.items.map((c) => `${c.description} × ${c.qty}`).join(', ')}</td>
+                <td className="whitespace-nowrap text-ink-2">{x.vs && formatLongDate(x.vs.date)}</td>
+              </>
+            )}
+            <td className="r num font-semibold text-ink whitespace-nowrap">{php(x.total)}</td>
+            <td className={`r num whitespace-nowrap ${x.paid > 0 ? 'text-ok' : 'text-faint'}`}>{php(x.paid)}</td>
+            <td className={`r num font-semibold whitespace-nowrap ${x.balance > 0 ? 'text-bad' : 'text-faint'}`}>{php(Math.max(x.balance, 0))}</td>
+            <td className="text-[11.5px] text-muted whitespace-nowrap">{last ? `${methods} · ${formatLongDate(last.date)}` : '—'}</td>
+            <td className="c">
+              {x.status === 'paid' ? (
+                <span className="badge badge-ok badge-dot">{en ? 'Paid' : '결제 완료'}</span>
+              ) : x.status === 'partial' ? (
+                <span className="badge badge-warn badge-dot">{en ? 'Partial' : '부분 결제'}</span>
+              ) : (
+                <span className="badge badge-bad badge-dot">{en ? 'Unpaid' : '미결제'}</span>
+              )}
+            </td>
+          </tr>
+        );
+      })}
+    </tbody>
+    {/* grand total of the whole tab (every page) */}
+    <tfoot>
+      <tr>
+        <td colSpan={3}>
+          {en ? 'Grand total' : '총합계'} <span className="text-muted font-normal">· {all.length} {kind === 'room' ? (en ? 'bookings' : '건') : en ? 'purchases' : '건'}</span>
+        </td>
+        {kind === 'room' && <td className="c num">{all.reduce((a, x) => a + x.nights, 0)}</td>}
+        <td className="r num text-ink">{php(all.reduce((a, x) => a + x.total, 0))}</td>
+        <td className="r num text-ok">{php(all.reduce((a, x) => a + x.paid, 0))}</td>
+        <td className="r num text-bad">{php(all.reduce((a, x) => a + Math.max(x.balance, 0), 0))}</td>
+        <td colSpan={2} />
+      </tr>
+    </tfoot>
+  </table>
+);
 
 const Dim: React.FC = () => <span className="text-faint/70">·</span>;
 
@@ -642,11 +1200,16 @@ const StatCard: React.FC<{
   Icon: React.ElementType;
   label: string;
   value: React.ReactNode;
-  pill: string;
+  /** a string = one chip; any other node is shown as is */
+  pill: React.ReactNode;
   tone: keyof typeof TONE;
   color: keyof typeof CARD_COLOR;
   onClick?: () => void;
-}> = ({ Icon, label, value, pill, tone, color, onClick }) => (
+  /** small note under the label (what the number counts) */
+  hint?: React.ReactNode;
+  /** colour of the big number (default ink) */
+  valueClass?: string;
+}> = ({ Icon, label, value, pill, tone, color, onClick, hint, valueClass = 'text-ink' }) => (
   <div
     onClick={onClick}
     className={`card ${CARD_COLOR[color].card} p-5 flex flex-col justify-between min-h-[118px] ${onClick ? 'cursor-pointer hover:brightness-[0.98] transition' : ''}`}
@@ -655,12 +1218,19 @@ const StatCard: React.FC<{
       <span className={`w-9 h-9 rounded-[10px] grid place-items-center text-white ${CARD_COLOR[color].icon}`}>
         <Icon className="w-[18px] h-[18px]" strokeWidth={1.75} />
       </span>
-      <span className="text-[13px] text-ink-2">{label}</span>
+      <span className="leading-tight">
+        <span className="block text-[13px] text-ink-2">{label}</span>
+        {hint && <span className="block text-[11px] text-muted mt-0.5">{hint}</span>}
+      </span>
       {onClick && <ArrowUpRight className="w-3.5 h-3.5 text-faint ml-auto" />}
     </div>
     <div className="flex items-end justify-between gap-2 mt-4">
-      <span className="num text-[22px] font-semibold leading-none tracking-tight text-ink">{value}</span>
-      <span className={`num inline-flex items-center h-6 px-2 rounded-full text-[11px] font-semibold whitespace-nowrap bg-surface/80 ${TONE[tone]}`}>{pill}</span>
+      <span className={`num text-[22px] font-semibold leading-none tracking-tight ${valueClass}`}>{value}</span>
+      {typeof pill === 'string' ? (
+        <span className={`num inline-flex items-center h-6 px-2 rounded-full text-[11px] font-semibold whitespace-nowrap bg-surface/80 ${TONE[tone]}`}>{pill}</span>
+      ) : (
+        pill
+      )}
     </div>
   </div>
 );

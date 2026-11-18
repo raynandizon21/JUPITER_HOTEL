@@ -8,12 +8,16 @@ import { RoomRatesMaintenance } from './components/RoomRatesMaintenance';
 import { RateCalculator } from './components/RateCalculator';
 import { AgentsMaintenance } from './components/AgentsMaintenance';
 import { FundPage } from './components/FundPage';
+import { ClearDataDialog } from './components/ClearDataDialog';
+import { InventoryPage } from './components/InventoryPage';
+import { WorkflowPage } from './components/WorkflowPage';
+import { StockProvider } from './components/StockContext';
 import { PH_HOLIDAYS } from './data/phHolidays';
 import { LanguageSelector } from './components/LanguageSelector';
 import jupiterLogo from './logo.jpg';
 import { Home as HomeIcon, Plus } from 'lucide-react';
 import { Toaster, toast } from './components/ui';
-import { ActiveModule, Agent, FundTxn, Holiday, CasinoRatesConfig, FolioCharge, Reservation, Settlement, VoucherSale } from './types/hotel';
+import { ActiveModule, Agent, FundTxn, Holiday, HotelPurchase, CasinoRatesConfig, FolioCharge, Reservation, Settlement, VoucherSale } from './types/hotel';
 import { migrateReservation, syncStatus } from './utils/billing';
 import { api } from './utils/api';
 import { defaultCasinoRates } from './data/initialData';
@@ -52,8 +56,11 @@ export default function App() {
   const [voucherSales, setVoucherSales] = useState<VoucherSale[]>([]);
   // Agents file maintenance (suggestions in the booking form)
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [clearOpen, setClearOpen] = useState(false);
   // Fund (Pondo): manual cash outs + opening balances
   const [fundTxns, setFundTxns] = useState<FundTxn[]>([]);
+  // stock bought from the hotel (Hotel Purchases)
+  const [purchases, setPurchases] = useState<HotelPurchase[]>([]);
   // Philippine holidays (auto holiday rate + calendar marks); built-in list until the server answers
   const [holidays, setHolidays] = useState<Holiday[]>(() => PH_HOLIDAYS.map((h) => ({ ...h, active: true })));
   const activeHolidays = holidays.filter((h) => h.active);
@@ -62,6 +69,7 @@ export default function App() {
     api.saveHoliday(h).catch(syncFailed);
   };
   const syncedFund = useRef(new Map<string, string>());
+  const syncedPurchases = useRef(new Map<string, string>());
   const [dbStatus, setDbStatus] = useState<'loading' | 'ready' | 'error'>('loading');
 
   // What the server already has (JSON per id / month), so only real changes are sent.
@@ -108,6 +116,9 @@ export default function App() {
         const fund = state.fundTransactions || [];
         syncedFund.current = new Map(fund.map((f) => [f.id, JSON.stringify(f)]));
         setFundTxns(fund);
+        const bought = state.purchases || [];
+        syncedPurchases.current = new Map(bought.map((p) => [p.id, JSON.stringify(p)]));
+        setPurchases(bought);
         if (state.holidays?.length) setHolidays(state.holidays);
         setCasinoRates(rates);
         setDbStatus('ready');
@@ -229,6 +240,27 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fundTxns, dbStatus]);
 
+  useEffect(() => {
+    if (dbStatus !== 'ready') return;
+    const seen = new Set<string>();
+    for (const p of purchases) {
+      seen.add(p.id);
+      const json = JSON.stringify(p);
+      if (syncedPurchases.current.get(p.id) === json) continue;
+      syncedPurchases.current.set(p.id, json);
+      api.savePurchase(p).catch((e) => {
+        syncedPurchases.current.delete(p.id); // retry on the next change
+        syncFailed(e);
+      });
+    }
+    for (const id of [...syncedPurchases.current.keys()]) {
+      if (seen.has(id)) continue;
+      syncedPurchases.current.delete(id);
+      api.deletePurchase(id).catch(syncFailed);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [purchases, dbStatus]);
+
   // 3. Navigation State
   const [activeModule, setActiveModule] = useState<ActiveModule>('dashboard');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -277,9 +309,173 @@ export default function App() {
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const [ledgerTab, setLedgerTab] = useState<'rooms' | 'vouchers'>('rooms');
 
+  /** The page of one sidebar module — used by the main area and by the System Workflow pop-ups. */
+  const renderModule = (m: ActiveModule): React.ReactNode => {
+    switch (m) {
+      case 'dashboard':
+        return (
+          <DailyDashboard
+            reservations={reservations}
+            voucherSales={voucherSales}
+            casinoRates={casinoRates}
+            setReservations={setReservations}
+            settlements={settlements}
+            setSettlements={setSettlements}
+            purchases={purchases}
+            onOpenInventory={() => setActiveModule('inventory')}
+            selectedMonth={selectedMonth}
+            setSelectedMonth={setSelectedMonth}
+            onNavigateToLedger={() => setActiveModule('ledger')}
+            language={language}
+          />
+        );
+      case 'daily':
+        return (
+          <DailySettlement
+            reservations={reservations}
+            voucherSales={voucherSales}
+            setReservations={setReservations}
+            casinoRates={casinoRates}
+            selectedMonth={selectedMonth}
+            setSelectedMonth={setSelectedMonth}
+            language={language}
+          />
+        );
+      case 'ledger':
+        return (
+          <GuestReservationLedger
+            key={ledgerTab}
+            initialTab={ledgerTab}
+            highlightId={highlightId}
+            agents={agents}
+            holidays={activeHolidays}
+            allHolidays={holidays}
+            onSaveHoliday={saveHoliday}
+            reservations={reservations}
+            setReservations={setReservations}
+            voucherSales={voucherSales}
+            setVoucherSales={setVoucherSales}
+            casinoRates={casinoRates}
+            selectedMonth={selectedMonth}
+            setSelectedMonth={setSelectedMonth}
+            language={language}
+          />
+        );
+      case 'calendar':
+        return (
+          <ReservationCalendar
+            holidays={activeHolidays}
+            reservations={reservations}
+            setReservations={setReservations}
+            casinoRates={casinoRates}
+            currentYearMonth={selectedMonth}
+            onSelectMonth={(ym) => setSelectedMonth(ym)}
+            language={language}
+          />
+        );
+      case 'maintenance':
+        return (
+          <RoomRatesMaintenance
+            casinoRates={casinoRates}
+            reservations={reservations}
+            onSave={(next) => {
+              // a renamed room type: move its bookings to the new name (bookings keep the room by name)
+              const renamed = new Map<string, string>();
+              for (const r of next.rooms) {
+                const old = casinoRates.rooms.find((x) => x.id === r.id);
+                if (old && old.name !== r.name) renamed.set(old.name.toLowerCase(), r.name);
+              }
+              if (renamed.size)
+                setReservations((prev) => prev.map((r) => (renamed.has(r.roomType.toLowerCase()) ? { ...r, roomType: renamed.get(r.roomType.toLowerCase())! } : r)));
+              setCasinoRates(next);
+            }}
+            language={language}
+          />
+        );
+      case 'agents':
+        return <AgentsMaintenance agents={agents} setAgents={setAgents} language={language} />;
+      case 'fund':
+        return (
+          <FundPage
+            casinoRates={casinoRates}
+            reservations={reservations}
+            voucherSales={voucherSales}
+            settlements={settlements}
+            fundTxns={fundTxns}
+            setFundTxns={setFundTxns}
+            selectedMonth={selectedMonth}
+            setSelectedMonth={setSelectedMonth}
+            language={language}
+          />
+        );
+      case 'calculator':
+        return <RateCalculator casinoRates={casinoRates} onBookWithQuote={handleBookWithQuote} language={language} />;
+      case 'workflow':
+        return (
+          <WorkflowPage
+            language={language}
+            renderModule={renderModule}
+            purchases={purchases}
+            reservations={reservations}
+            voucherSales={voucherSales}
+            settlements={settlements}
+            rates={casinoRates}
+          />
+        );
+      case 'inventory':
+        return (
+          <InventoryPage
+            purchases={purchases}
+            setPurchases={setPurchases}
+            reservations={reservations}
+            voucherSales={voucherSales}
+            casinoRates={casinoRates}
+            language={language}
+          />
+        );
+    }
+  };
+
   return (
+    <StockProvider value={{ purchases, reservations, voucherSales, rates: casinoRates }}>
     <div className="h-screen w-screen overflow-hidden bg-canvas text-ink flex flex-col p-3 gap-3">
       <Toaster />
+      {clearOpen && (
+        <ClearDataDialog
+          en={language === 'en'}
+          counts={{
+            bookings: reservations.length,
+            vouchers: voucherSales.length,
+            hotelPayments: settlements.reduce((a, s) => a + s.payments.length, 0),
+            fund: fundTxns.length,
+            purchases: purchases.length,
+          }}
+          onClose={() => setClearOpen(false)}
+          onConfirm={async () => {
+            const en = language === 'en';
+            try {
+              await api.clearData();
+            } catch (e) {
+              toast(en ? 'Data was not deleted' : '삭제 실패', e instanceof Error ? e.message : String(e), 'bad');
+              return;
+            }
+            // forget what was synced first, so the sync effects don't send anything back
+            syncedRes.current = new Map();
+            syncedSettle.current = new Map();
+            syncedVouchers.current = new Map();
+            syncedFund.current = new Map();
+            syncedPurchases.current = new Map();
+            setReservations([]);
+            setSettlements([]);
+            setVoucherSales([]);
+            setFundTxns([]);
+            setPurchases([]);
+            api.listAgents().then(setAgents, () => {}); // booking counts per agent are now 0
+            setClearOpen(false);
+            toast(en ? 'All data deleted' : '모든 데이터 삭제됨', en ? 'Bookings, vouchers, hotel payments and fund entries' : '예약, 바우처, 호텔 지급, 자금 내역', 'bad');
+          }}
+        />
+      )}
       {bookingOpen && (
         <GuestReservationLedger
           formOnly
@@ -353,6 +549,7 @@ export default function App() {
           collapsed={sidebarCollapsed}
           setCollapsed={setSidebarCollapsed}
           language={language}
+          // Clear data is hidden for now — add back: onClearData={() => setClearOpen(true)}
         />
 
         <main className="flex-1 min-w-0 overflow-y-auto rounded-2xl">
@@ -386,113 +583,12 @@ export default function App() {
                 {language === 'en' ? 'New Booking' : '새 예약'}
               </button>
             </nav>
-            {activeModule === 'dashboard' && (
-              <DailyDashboard
-                reservations={reservations}
-                voucherSales={voucherSales}
-                casinoRates={casinoRates}
-                setReservations={setReservations}
-                settlements={settlements}
-                setSettlements={setSettlements}
-                selectedMonth={selectedMonth}
-                setSelectedMonth={setSelectedMonth}
-                onNavigateToLedger={() => setActiveModule('ledger')}
-                language={language}
-              />
-            )}
-
-            {activeModule === 'daily' && (
-              <DailySettlement
-                reservations={reservations}
-                voucherSales={voucherSales}
-                setReservations={setReservations}
-                casinoRates={casinoRates}
-                selectedMonth={selectedMonth}
-                setSelectedMonth={setSelectedMonth}
-                language={language}
-              />
-            )}
-
-            {activeModule === 'ledger' && (
-              <GuestReservationLedger
-                key={ledgerTab}
-                initialTab={ledgerTab}
-                highlightId={highlightId}
-                agents={agents}
-                holidays={activeHolidays}
-                allHolidays={holidays}
-                onSaveHoliday={saveHoliday}
-                reservations={reservations}
-                setReservations={setReservations}
-                voucherSales={voucherSales}
-                setVoucherSales={setVoucherSales}
-                casinoRates={casinoRates}
-                selectedMonth={selectedMonth}
-                setSelectedMonth={setSelectedMonth}
-                language={language}
-              />
-            )}
-
-            {activeModule === 'calendar' && (
-              <ReservationCalendar
-                holidays={activeHolidays}
-                reservations={reservations}
-                setReservations={setReservations}
-                casinoRates={casinoRates}
-                currentYearMonth={selectedMonth}
-                onSelectMonth={(ym) => setSelectedMonth(ym)}
-                language={language}
-              />
-            )}
-
-            {activeModule === 'maintenance' && (
-              <RoomRatesMaintenance
-                casinoRates={casinoRates}
-                reservations={reservations}
-                onSave={(next) => {
-                  // a renamed room type: move its bookings to the new name (bookings keep the room by name)
-                  const renamed = new Map<string, string>();
-                  for (const r of next.rooms) {
-                    const old = casinoRates.rooms.find((x) => x.id === r.id);
-                    if (old && old.name !== r.name) renamed.set(old.name.toLowerCase(), r.name);
-                  }
-                  if (renamed.size)
-                    setReservations((prev) => prev.map((r) => (renamed.has(r.roomType.toLowerCase()) ? { ...r, roomType: renamed.get(r.roomType.toLowerCase())! } : r)));
-                  setCasinoRates(next);
-                }}
-                language={language}
-              />
-            )}
-
-            {activeModule === 'agents' && <AgentsMaintenance agents={agents} setAgents={setAgents} language={language} />}
-
-
-
-            {activeModule === 'fund' && (
-              <FundPage
-                casinoRates={casinoRates}
-                reservations={reservations}
-                voucherSales={voucherSales}
-                settlements={settlements}
-                fundTxns={fundTxns}
-                setFundTxns={setFundTxns}
-                selectedMonth={selectedMonth}
-                setSelectedMonth={setSelectedMonth}
-                language={language}
-              />
-            )}
-
-            {activeModule === 'calculator' && (
-              <RateCalculator
-                casinoRates={casinoRates}
-                onBookWithQuote={handleBookWithQuote}
-                language={language}
-              />
-            )}
+            {renderModule(activeModule)}
           </div>
         </main>
       </div>
     </div>
+    </StockProvider>
   );
 }
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutGrid, CalendarRange, BookOpenText, CalendarDays, SlidersHorizontal, Calculator, Menu, UserRound, PiggyBank, Trash2 } from 'lucide-react';
+import { LayoutGrid, CalendarRange, BookOpenText, CalendarDays, SlidersHorizontal, Calculator, Menu, UserRound, PiggyBank, Trash2, ShoppingCart, Workflow } from 'lucide-react';
 import { ActiveModule } from '../types/hotel';
 import { Language, translations } from '../i18n/translations';
 
@@ -17,6 +17,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeModule, setActiveModule,
   const t = translations[language];
   const en = language === 'en';
 
+  // Overview → Hotel (Jupiter ↔ Hilton: buying) → Guests (Jupiter ↔ guest: selling) → File maintenance
   const groups: { label: string; items: { id: ActiveModule; label: string; Icon: React.ElementType }[] }[] = [
     {
       label: en ? 'Overview' : '개요',
@@ -27,24 +28,27 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeModule, setActiveModule,
       ],
     },
     {
-      label: en ? 'Reservations' : '예약',
+      label: en ? 'Hotel' : '호텔',
       items: [
-        { id: 'ledger', label: t.navLedger, Icon: BookOpenText },
-        { id: 'calendar', label: t.navCalendar, Icon: CalendarDays },
+        { id: 'inventory', label: en ? 'Hotel Purchases' : '호텔 구매', Icon: ShoppingCart },
+        { id: 'maintenance', label: t.navMaintenance, Icon: SlidersHorizontal },
       ],
     },
     {
-      label: en ? 'Rates' : '요금',
+      label: en ? 'Guests' : '손님',
       items: [
-        { id: 'maintenance', label: t.navMaintenance, Icon: SlidersHorizontal },
+        { id: 'ledger', label: t.navLedger, Icon: BookOpenText },
+        { id: 'calendar', label: t.navCalendar, Icon: CalendarDays },
         { id: 'calculator', label: t.navCalculator, Icon: Calculator },
       ],
     },
     {
       label: en ? 'File maintenance' : '기초 정보',
-      items: [
-        { id: 'agents', label: en ? 'Agents' : '에이전트', Icon: UserRound },
-      ],
+      items: [{ id: 'agents', label: en ? 'Agents' : '에이전트', Icon: UserRound }],
+    },
+    {
+      label: en ? 'Guide' : '가이드',
+      items: [{ id: 'workflow', label: en ? 'System Workflow' : '시스템 워크플로', Icon: Workflow }],
     },
   ];
 

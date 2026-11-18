@@ -348,3 +348,39 @@ INSERT IGNORE INTO `holidays` (`HOLIDAY_DATE`, `HOLIDAY_NAME`, `HOLIDAY_TYPE`) V
   ('2027-12-25', 'Christmas Day', 'regular'),
   ('2027-12-30', 'Rizal Day', 'regular'),
   ('2027-12-31', 'Last Day of the Year', 'special');
+
+
+-- 11) Hotel purchases (Hotel Inventory page) — stock Jupiter buys from the hotel at the
+--     wholesale rate. Guest bookings / voucher sales use it up. Its month is what Jupiter owes the hotel.
+CREATE TABLE IF NOT EXISTS `hotel_purchases` (
+  `IDNo`           INT          NOT NULL AUTO_INCREMENT,
+  `APP_ID`         VARCHAR(50)  NOT NULL COMMENT 'the app''s own id (key for saving)',
+  `PURCHASE_DATE`  DATE         NOT NULL,
+  `REF_MONTH`      CHAR(7)      AS (CONCAT(YEAR(`PURCHASE_DATE`), '-', LPAD(MONTH(`PURCHASE_DATE`), 2, '0'))) STORED COMMENT 'settlement month with the hotel',
+  `REFERENCE`      VARCHAR(100) NULL COMMENT 'hotel invoice / reference no.',
+  `REMARKS`        VARCHAR(500) NULL,
+  `ACTIVE`         TINYINT(1)   NOT NULL DEFAULT 1 COMMENT '0 = deleted',
+  `CREATED_DT`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `CREATED_BY`     INT          NOT NULL,
+  `EDITED_DT`      DATETIME     NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`IDNo`),
+  UNIQUE KEY `uq_hotel_purchases_app_id` (`APP_ID`),
+  KEY `idx_hotel_purchases_month` (`REF_MONTH`),
+  CONSTRAINT `fk_hotel_purchases_user` FOREIGN KEY (`CREATED_BY`) REFERENCES `users` (`IDNo`)
+) ENGINE=InnoDB;
+
+
+-- 12) Lines of a purchase: room-nights of a room type, or vouchers
+CREATE TABLE IF NOT EXISTS `hotel_purchase_items` (
+  `IDNo`         INT           NOT NULL AUTO_INCREMENT,
+  `PURCHASE_ID`  INT           NOT NULL,
+  `ITEM_KIND`    ENUM('room','voucher') NOT NULL,
+  `ITEM_CODE`    VARCHAR(50)   NOT NULL COMMENT 'room_types.ROOM_CODE, or breakfast / dinner / extraBed',
+  `QTY`          INT           NOT NULL COMMENT 'room-nights or vouchers',
+  `UNIT_COST`    DECIMAL(12,2) NOT NULL COMMENT 'wholesale price per unit',
+  `AMOUNT`       DECIMAL(12,2) AS (`QTY` * `UNIT_COST`) STORED,
+  PRIMARY KEY (`IDNo`),
+  KEY `idx_purchase_items_purchase` (`PURCHASE_ID`),
+  CONSTRAINT `chk_purchase_items_qty` CHECK (`QTY` > 0),
+  CONSTRAINT `fk_purchase_items_purchase` FOREIGN KEY (`PURCHASE_ID`) REFERENCES `hotel_purchases` (`IDNo`) ON DELETE CASCADE
+) ENGINE=InnoDB;

@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { DailySettlement } from './DailySettlement';
-import { Reservation, CasinoRatesConfig, Settlement, PaymentMethod, FolioPayment, VoucherSale } from '../types/hotel';
+import { Reservation, CasinoRatesConfig, Settlement, PaymentMethod, FolioPayment, VoucherSale, HotelPurchase } from '../types/hotel';
+import { itemLabel, purchaseTotal } from '../utils/inventory';
 import { folioOf, settlementOf, PAYMENT_METHODS, uid, nowStamp, todayISO, printDocument, escapeHtml as esc } from '../utils/billing';
 import { GuestFolio } from './GuestFolio';
 import { exportSettlementExcel } from '../utils/excelExport';
@@ -16,6 +17,9 @@ interface DailyDashboardProps {
   setReservations: React.Dispatch<React.SetStateAction<Reservation[]>>;
   settlements: Settlement[];
   setSettlements: React.Dispatch<React.SetStateAction<Settlement[]>>;
+  /** stock bought from the hotel — what Jupiter owes the hotel each month */
+  purchases: HotelPurchase[];
+  onOpenInventory: () => void;
   selectedMonth: string;
   setSelectedMonth: (month: string) => void;
   onNavigateToLedger: () => void;
@@ -24,21 +28,27 @@ interface DailyDashboardProps {
 
 const php = (n: number, dec = false) => '₱' + formatCurrency(n, 'PHP', dec).replace('PHP ', '');
 
-const summarize = (list: Reservation[], paidToHotel: number) => {
+/**
+ * One month: what Jupiter owes the hotel = purchases dated that month (wholesale stock);
+ * guest figures come from the bookings that check in that month.
+ */
+const summarize = (list: Reservation[], paidToHotel: number, bought: HotelPurchase[]) => {
   const folios = list.map((r) => ({ r, f: folioOf(r) }));
-  const billed = folios.reduce((a, x) => a + x.f.total, 0);
+  const billed = bought.reduce((a, p) => a + purchaseTotal(p), 0);
+  const guestBilled = folios.reduce((a, x) => a + x.f.total, 0);
   const guestPaid = folios.reduce((a, x) => a + x.f.paid, 0);
   const nights = list.reduce((a, r) => a + r.nights, 0);
   const settled = Math.min(paidToHotel, billed) || paidToHotel;
   return {
     count: list.length,
+    purchases: bought.length,
     nights,
     billed,
     settled: paidToHotel,
     balance: Math.max(billed - paidToHotel, 0),
     pct: billed ? Math.min(100, Math.round((settled / billed) * 100)) : 0,
     guestPaid,
-    guestBalance: billed - guestPaid,
+    guestBalance: guestBilled - guestPaid,
     guestOwing: folios.filter((x) => x.f.balance > 0).map((x) => x.r),
   };
 };
@@ -50,6 +60,8 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
   setReservations,
   settlements,
   setSettlements,
+  purchases,
+  onOpenInventory,
   selectedMonth,
   setSelectedMonth,
   onNavigateToLedger,
@@ -60,12 +72,20 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
 
   const monthRes = useMemo(() => reservations.filter((r) => r.referenceMonth === month), [reservations, month]);
   const hotelPays = settlementOf(settlements, month).payments;
-  const s = useMemo(() => summarize(monthRes, settlementOf(settlements, month).paid), [monthRes, settlements, month]);
+  const monthPurchases = useMemo(() => purchases.filter((p) => p.date.slice(0, 7) === month), [purchases, month]);
+  const s = useMemo(() => summarize(monthRes, settlementOf(settlements, month).paid, monthPurchases), [monthRes, settlements, month, monthPurchases]);
 
   const history = useMemo(() => {
-    const months = Array.from(new Set([...MONTHS, ...reservations.map((r) => r.referenceMonth)])).sort().reverse();
-    return months.map((m) => ({ month: m, ...summarize(reservations.filter((r) => r.referenceMonth === m), settlementOf(settlements, m).paid) }));
-  }, [reservations, settlements]);
+    const months = Array.from(new Set([...MONTHS, ...reservations.map((r) => r.referenceMonth), ...purchases.map((p) => p.date.slice(0, 7))])).sort().reverse();
+    return months.map((m) => ({
+      month: m,
+      ...summarize(
+        reservations.filter((r) => r.referenceMonth === m),
+        settlementOf(settlements, m).paid,
+        purchases.filter((p) => p.date.slice(0, 7) === m)
+      ),
+    }));
+  }, [reservations, settlements, purchases]);
 
   // ---- Jupiter → Hotel payments ----
   const [folioId, setFolioId] = useState<string | null>(null);
@@ -142,7 +162,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
   const exportExcel = async () => {
     setExporting(true);
     try {
-      await exportSettlementExcel(month, monthRes, hotelPays);
+      await exportSettlementExcel(month, monthRes, hotelPays, monthPurchases, casinoRates);
       toast(en ? 'Excel exported' : '엑셀 내보내기 완료', `Jupiter_Hotel_Settlement_${month}.xlsx`);
     } catch (e) {
       console.error(e);
@@ -153,11 +173,13 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
   };
 
   const printStatement = () => {
-    const rowsHtml = monthRes
-      .map((r) => {
-        const f = folioOf(r);
-        return `<tr><td>${esc(r.guestName)}</td><td>${esc(r.roomType)}</td><td>${formatDateRange(r.checkIn, r.checkOut)}</td><td class="r">${r.nights}</td><td class="r">${php(r.amount)}</td><td class="r">${php(f.extras)}</td><td class="r">${php(f.total)}</td></tr>`;
-      })
+    const rowsHtml = monthPurchases
+      .flatMap((p) =>
+        p.items.map(
+          (i) =>
+            `<tr><td>${formatLongDate(p.date)}</td><td>${esc(p.reference || '—')}</td><td>${esc(itemLabel(i, casinoRates, true))}</td><td class="r">${i.qty}</td><td class="r">${i.unitCost ? php(i.unitCost) : 'Free'}</td><td class="r">${php(i.qty * i.unitCost)}</td></tr>`
+        )
+      )
       .join('');
     const payHtml = hotelPays
       .map((p) => `<tr><td>${formatLongDate(p.date)}</td><td>${esc(p.method)}</td><td>${esc(p.reference || '—')}</td><td>${esc(p.oic || '—')}</td><td>${esc(p.remarks || '—')}</td><td class="r">${php(p.amount)}</td></tr>`)
@@ -166,9 +188,9 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
       `Settlement Statement ${formatMonth(month)}`,
       `<div class="row"><div><h1>Monthly Settlement Statement</h1><div class="muted">Statement no. SET-${month.replace('-', '')}</div></div>
        <div style="text-align:right"><b>${formatMonth(month)}</b><div class="muted">Billed to: Jupiter Junket</div><div class="muted">From: Hilton Hotel</div></div></div>
-       <h2>Bookings</h2><table><thead><tr><th>Guest</th><th>Room</th><th>Stay</th><th class="r">Nights</th><th class="r">Room</th><th class="r">Extras</th><th class="r">Total</th></tr></thead>
-       <tbody>${rowsHtml || '<tr><td colspan="8" class="muted">No bookings</td></tr>'}</tbody>
-       <tfoot><tr><td colspan="3">Total (${s.count} bookings)</td><td class="r">${s.nights}</td><td></td><td></td><td class="r">${php(s.billed)}</td></tr></tfoot></table>
+       <h2>Rooms and vouchers bought</h2><table><thead><tr><th>Date</th><th>Reference</th><th>Item</th><th class="r">Qty</th><th class="r">Unit cost</th><th class="r">Amount</th></tr></thead>
+       <tbody>${rowsHtml || '<tr><td colspan="6" class="muted">No purchases this month</td></tr>'}</tbody>
+       <tfoot><tr><td colspan="5">Total (${s.purchases} purchases)</td><td class="r">${php(s.billed)}</td></tr></tfoot></table>
        <h2>Payments received from Jupiter</h2><table><thead><tr><th>Date</th><th>Method</th><th>Reference</th><th>OIC</th><th>Remarks</th><th class="r">Amount</th></tr></thead>
        <tbody>${payHtml || '<tr><td colspan="6" class="muted">No payments yet</td></tr>'}</tbody></table>
        <div class="totals"><div><span>Total billed</span><span>${php(s.billed)}</span></div><div><span>Payments received</span><span>−${php(s.settled)}</span></div>
@@ -212,7 +234,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
     <div>
       <PageHeader
         title={en ? 'Dashboard' : '대시보드'}
-        lede={en ? 'Room charges between the Jupiter junket and the hotel, settled per reference month' : '주피터 정킷과 호텔 간 객실 요금을 기준 월 단위로 정산합니다'}
+        lede={en ? 'Hotel bill for rooms and vouchers bought each month, and guest payments' : '월별 호텔 구매액(객실·바우처) 정산과 손님 결제 현황'}
         actions={
           <>
             <MonthSelect value={month} onChange={setSelectedMonth} months={history.map((h) => h.month)} />
@@ -226,7 +248,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
             </button>
             <button onClick={() => setPayOpen(true)} disabled={s.balance <= 0} className="btn btn-primary">
               <Landmark className="w-4 h-4" />
-              {en ? 'Record payment to hotel' : '호텔 지급 기록'}
+              {en ? 'Pay Hotel Bill' : '호텔 청구 지급'}
             </button>
           </>
         }
@@ -234,7 +256,15 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
 
       {/* Row 1 — basic cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 mb-4">
-        <StatCard Icon={Wallet} label={en ? 'Total hotel bill' : '호텔 총 청구액'} value={php(s.billed)} pill={`${s.count} ${en ? 'bookings' : '건'}`} tone="neutral" color="blue" />
+        <StatCard
+          Icon={Wallet}
+          label={en ? 'Bought from hotel' : '호텔 구매액'}
+          value={php(s.billed)}
+          pill={`${s.purchases} ${en ? (s.purchases === 1 ? 'purchase' : 'purchases') : '건'}`}
+          tone="neutral"
+          color="blue"
+          onClick={onOpenInventory}
+        />
         <StatCard Icon={Landmark} label={en ? 'Paid to hotel' : '호텔 지급액'} value={php(s.settled)} pill={`${s.pct}%`} tone="ok" color="green" />
         <StatCard Icon={AlertTriangle} label={en ? 'Balance due to hotel' : '호텔 미지급 잔액'} value={php(s.balance)} pill={s.balance > 0 ? (en ? 'Open' : '미정산') : en ? 'Settled' : '정산 완료'} tone={s.balance > 0 ? 'bad' : 'ok'} color={s.balance > 0 ? 'red' : 'green'} />
         <StatCard Icon={Users} label={en ? 'Guest payments received' : '손님 결제 수령액'} value={php(s.guestPaid)} pill={`${php(s.guestBalance)} ${en ? 'unpaid' : '미결제'}`} tone={s.guestBalance > 0 ? 'warn' : 'ok'} color="amber" />
@@ -326,7 +356,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
               </span>
               {en ? 'Guest Balances' : '손님 미수금'}
             </h3>
-            <p className="text-[12.5px] text-muted mt-0.5">{en ? 'Guests who still owe on their bill' : '청구서 잔액이 남은 손님'}</p>
+            <p className="text-[12.5px] text-muted mt-0.5">{en ? 'Guests with an unpaid balance' : '청구서 잔액이 남은 손님'}</p>
             <div className="mt-3 space-y-2 overflow-y-auto max-h-[240px]">
               {s.guestOwing.length === 0 && <Empty ok text={en ? 'All guest bills are paid' : '모든 손님 청구서 결제 완료'} />}
               {s.guestOwing.map((r) => (
@@ -364,7 +394,8 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
                 <th>{en ? 'Month' : '기준 월'}</th>
                 <th className="c">{en ? 'Bookings' : '예약'}</th>
                 <th className="c">{en ? 'Nights' : '박수'}</th>
-                <th className="r !bg-accent-soft !text-accent">{en ? 'Billed' : '청구액'}</th>
+                <th className="c">{en ? 'Purchases' : '구매'}</th>
+                <th className="r !bg-accent-soft !text-accent">{en ? 'Bought from hotel' : '호텔 구매액'}</th>
                 <th className="r !bg-ok-soft !text-ok">{en ? 'Paid to hotel' : '호텔 지급액'}</th>
                 <th className="r !bg-bad-soft !text-bad">{en ? 'Balance' : '잔액'}</th>
                 <th className="c">{en ? 'Status' : '상태'}</th>
@@ -376,11 +407,12 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
                   <td className={`font-medium text-ink whitespace-nowrap ${h.month === month ? 'shadow-[inset_3px_0_0_var(--color-accent)]' : ''}`}>{formatMonth(h.month)}</td>
                   <td className="c num">{h.count ? <span className="inline-grid place-items-center min-w-6 h-6 px-1.5 rounded-full bg-accent-soft text-accent font-semibold">{h.count}</span> : <Dim />}</td>
                   <td className="c num">{h.nights || <Dim />}</td>
+                  <td className="c num">{h.purchases || <Dim />}</td>
                   <td className="r num text-accent font-semibold bg-accent-soft/30">{h.billed ? php(h.billed) : <Dim />}</td>
                   <td className="r num text-ok font-semibold bg-ok-soft/30">{h.settled ? php(h.settled) : <Dim />}</td>
                   <td className="r num bg-bad-soft/30">{h.balance ? <span className="text-bad font-semibold">{php(h.balance)}</span> : <Dim />}</td>
                   <td className="c">
-                    {h.count === 0 ? (
+                    {h.count === 0 && h.billed === 0 && h.settled === 0 ? (
                       <span className="badge badge-neutral">{en ? 'No activity' : '내역 없음'}</span>
                     ) : h.balance <= 0 ? (
                       <span className="badge badge-ok badge-dot">{en ? 'Settled' : '정산 완료'}</span>
@@ -451,7 +483,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
         <Dialog
           width="max-w-md"
           onClose={() => setPayOpen(false)}
-          title={editingPay ? (en ? 'Edit payment to hotel' : '호텔 지급 수정') : en ? 'Record payment to hotel' : '호텔 지급 기록'}
+          title={editingPay ? (en ? 'Edit payment to hotel' : '호텔 지급 수정') : en ? 'Pay Hotel Bill' : '호텔 청구 지급'}
           subtitle={`${formatMonth(month)} · ${en ? 'balance' : '잔액'} ${php(s.balance)}`}
         >
           <div className="px-6 py-5 grid grid-cols-2 gap-4">

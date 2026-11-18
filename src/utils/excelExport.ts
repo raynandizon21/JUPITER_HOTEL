@@ -1,5 +1,6 @@
-import type { Reservation, FolioPayment } from '../types/hotel';
+import type { Reservation, FolioPayment, HotelPurchase, CasinoRatesConfig } from '../types/hotel';
 import { folioOf } from './billing';
+import { itemLabel, purchaseTotal } from './inventory';
 import { formatMonth, getStayNights, getDayCategory } from './hotelHelpers';
 
 const PESO = '"₱"#,##0.00';
@@ -12,16 +13,24 @@ const toDate = (iso: string) => new Date(iso + 'T00:00:00Z');
 
 /**
  * Builds and downloads "Jupiter_Hotel_Settlement_YYYY-MM.xlsx" with:
- * Summary · Bookings · Extra Charges · Guest Payments · Hotel Payments
+ * Transactions · Summary · Hotel Purchases · Bookings · Extra Charges · Guest Payments.
+ * What Jupiter owes the hotel = the purchases dated that month (wholesale stock).
  */
-export async function exportSettlementExcel(month: string, bookings: Reservation[], hotelPayments: FolioPayment[]) {
+export async function exportSettlementExcel(
+  month: string,
+  bookings: Reservation[],
+  hotelPayments: FolioPayment[],
+  purchases: HotelPurchase[],
+  rates: CasinoRatesConfig
+) {
   const ExcelJS = (await import('exceljs')).default;
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Jupiter Hotel PMS';
   wb.created = new Date();
 
   const folios = bookings.map((r) => ({ r, f: folioOf(r) }));
-  const billed = folios.reduce((a, x) => a + x.f.total, 0);
+  const billed = purchases.reduce((a, p) => a + purchaseTotal(p), 0);
+  const guestBilled = folios.reduce((a, x) => a + x.f.total, 0);
   const paidToHotel = hotelPayments.reduce((a, p) => a + p.amount, 0);
   const guestPaid = folios.reduce((a, x) => a + x.f.paid, 0);
   const nights = bookings.reduce((a, r) => a + r.nights, 0);
@@ -118,15 +127,17 @@ export async function exportSettlementExcel(month: string, bookings: Reservation
   const rows: [string, number | string, string?][] = [
     ['Statement no.', `SET-${month.replace('-', '')}`],
     ['Settlement period', formatMonth(month)],
-    ['Bookings', bookings.length],
-    ['Room-nights', nights],
-    ['Total hotel bill', billed, PESO],
+    ['Purchases from hotel', purchases.length],
+    ['Bought from hotel', billed, PESO],
     ['Paid to hotel', paidToHotel, PESO],
     ['Balance due to hotel', Math.max(billed - paidToHotel, 0), PESO],
     ['Status', billed > 0 && paidToHotel >= billed ? 'SETTLED' : 'OPEN'],
     ['', ''],
+    ['Bookings (check-in this month)', bookings.length],
+    ['Room-nights', nights],
+    ['Charged to guests', guestBilled, PESO],
     ['Guest payments received', guestPaid, PESO],
-    ['Unpaid by guests', billed - guestPaid, PESO],
+    ['Unpaid by guests', guestBilled - guestPaid, PESO],
   ];
   rows.forEach(([label, value, fmt], i) => {
     const r = sum.getRow(4 + i);
@@ -137,9 +148,9 @@ export async function exportSettlementExcel(month: string, bookings: Reservation
     r.getCell(2).alignment = { horizontal: 'right' };
     if (fmt) r.getCell(2).numFmt = fmt;
   });
-  const statusCell = sum.getCell(4 + 7, 2);
+  const statusCell = sum.getCell(4 + 6, 2);
   statusCell.font = { bold: true, color: { argb: statusCell.value === 'SETTLED' ? 'FF2E7A57' : 'FFB4372C' } };
-  const balCell = sum.getCell(4 + 6, 2);
+  const balCell = sum.getCell(4 + 5, 2);
   balCell.font = { bold: true, size: 13, color: { argb: billed - paidToHotel > 0 ? 'FFB4372C' : 'FF2E7A57' } };
 
   const ph = 4 + rows.length + 2;
@@ -162,6 +173,35 @@ export async function exportSettlementExcel(month: string, bookings: Reservation
   sum.getCell(phEnd + 5, 1).value = 'Prepared by (Hotel)';
   sum.getCell(phEnd + 4, 3).value = '______________________________';
   sum.getCell(phEnd + 5, 3).value = 'Received by (Jupiter)';
+
+  // ---------------- Hotel Purchases (what the hotel bills Jupiter) ----------------
+  const hp = wb.addWorksheet('Hotel Purchases', { views: [{ state: 'frozen', ySplit: 4 }] });
+  hp.columns = [{ width: 20 }, { width: 22 }, { width: 34 }, { width: 10 }, { width: 10 }, { width: 15 }, { width: 16 }, { width: 30 }];
+  title(hp, 'Rooms and vouchers bought from the hotel', 8);
+  hp.getRow(4).values = ['Date', 'Reference', 'Item', 'Type', 'Qty', 'Unit cost', 'Amount', 'Remarks'];
+  header(hp, 4);
+  let pr = 5;
+  purchases.forEach((p) =>
+    p.items.forEach((i) => {
+      const row = hp.getRow(pr++);
+      row.values = [
+        toDate(p.date),
+        p.reference || '—',
+        itemLabel(i, rates, true),
+        i.kind === 'room' ? 'Room-nights' : 'Voucher',
+        i.qty,
+        i.unitCost,
+        { formula: `E${pr - 1}*F${pr - 1}`, result: i.qty * i.unitCost },
+        i.unitCost ? p.remarks || '' : ['FREE from hotel', p.remarks].filter(Boolean).join(' — '),
+      ];
+      row.getCell(1).numFmt = DATE;
+      row.getCell(6).numFmt = PESO;
+      row.getCell(7).numFmt = PESO;
+    })
+  );
+  hp.getRow(pr).values = ['TOTAL', `${purchases.length} purchases`, '', '', pr > 5 ? { formula: `SUM(E5:E${pr - 1})` } : 0, '', pr > 5 ? { formula: `SUM(G5:G${pr - 1})` } : 0, ''];
+  hp.getCell(pr, 7).numFmt = PESO;
+  totalRow(hp, pr);
 
   // ---------------- Bookings ----------------
   const bk = wb.addWorksheet('Bookings', { views: [{ state: 'frozen', ySplit: 4 }] });

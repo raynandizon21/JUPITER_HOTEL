@@ -58,6 +58,35 @@ const VOUCHER_TABLES = [
   CONSTRAINT \`chk_fund_amount\` CHECK (\`AMOUNT\` > 0),
   CONSTRAINT \`fk_fund_user\` FOREIGN KEY (\`CREATED_BY\`) REFERENCES \`users\` (\`IDNo\`)
 ) ENGINE=InnoDB`,
+  `CREATE TABLE IF NOT EXISTS \`hotel_purchases\` (
+  \`IDNo\`           INT          NOT NULL AUTO_INCREMENT,
+  \`APP_ID\`         VARCHAR(50)  NOT NULL COMMENT 'the app''s own id (key for saving)',
+  \`PURCHASE_DATE\`  DATE         NOT NULL,
+  \`REF_MONTH\`      CHAR(7)      AS (CONCAT(YEAR(\`PURCHASE_DATE\`), '-', LPAD(MONTH(\`PURCHASE_DATE\`), 2, '0'))) STORED COMMENT 'settlement month with the hotel',
+  \`REFERENCE\`      VARCHAR(100) NULL COMMENT 'hotel invoice / reference no.',
+  \`REMARKS\`        VARCHAR(500) NULL,
+  \`ACTIVE\`         TINYINT(1)   NOT NULL DEFAULT 1 COMMENT '0 = deleted',
+  \`CREATED_DT\`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  \`CREATED_BY\`     INT          NOT NULL,
+  \`EDITED_DT\`      DATETIME     NULL ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (\`IDNo\`),
+  UNIQUE KEY \`uq_hotel_purchases_app_id\` (\`APP_ID\`),
+  KEY \`idx_hotel_purchases_month\` (\`REF_MONTH\`),
+  CONSTRAINT \`fk_hotel_purchases_user\` FOREIGN KEY (\`CREATED_BY\`) REFERENCES \`users\` (\`IDNo\`)
+) ENGINE=InnoDB`,
+  `CREATE TABLE IF NOT EXISTS \`hotel_purchase_items\` (
+  \`IDNo\`         INT           NOT NULL AUTO_INCREMENT,
+  \`PURCHASE_ID\`  INT           NOT NULL,
+  \`ITEM_KIND\`    ENUM('room','voucher') NOT NULL,
+  \`ITEM_CODE\`    VARCHAR(50)   NOT NULL COMMENT 'room_types.ROOM_CODE, or breakfast / dinner / extraBed',
+  \`QTY\`          INT           NOT NULL COMMENT 'room-nights or vouchers',
+  \`UNIT_COST\`    DECIMAL(12,2) NOT NULL COMMENT 'wholesale price per unit',
+  \`AMOUNT\`       DECIMAL(12,2) AS (\`QTY\` * \`UNIT_COST\`) STORED,
+  PRIMARY KEY (\`IDNo\`),
+  KEY \`idx_purchase_items_purchase\` (\`PURCHASE_ID\`),
+  CONSTRAINT \`chk_purchase_items_qty\` CHECK (\`QTY\` > 0),
+  CONSTRAINT \`fk_purchase_items_purchase\` FOREIGN KEY (\`PURCHASE_ID\`) REFERENCES \`hotel_purchases\` (\`IDNo\`) ON DELETE CASCADE
+) ENGINE=InnoDB`,
   `CREATE TABLE IF NOT EXISTS \`agents\` (
   \`IDNo\`        INT          NOT NULL AUTO_INCREMENT,
   \`AGENT_NAME\`  VARCHAR(100) NOT NULL,
@@ -484,6 +513,20 @@ app.get(
       })),
     }));
 
+    const [pRows] = await pool.query('SELECT * FROM hotel_purchases WHERE ACTIVE = 1 ORDER BY PURCHASE_DATE, IDNo');
+    const [piRows] = await pool.query(
+      'SELECT i.* FROM hotel_purchase_items i JOIN hotel_purchases p ON p.IDNo = i.PURCHASE_ID WHERE p.ACTIVE = 1 ORDER BY i.IDNo'
+    );
+    const purchases = pRows.map((p) => ({
+      id: p.APP_ID,
+      date: p.PURCHASE_DATE,
+      reference: p.REFERENCE || '',
+      remarks: p.REMARKS || '',
+      items: piRows
+        .filter((i) => i.PURCHASE_ID === p.IDNo)
+        .map((i) => ({ id: `pi${i.IDNo}`, kind: i.ITEM_KIND, item: i.ITEM_CODE, qty: i.QTY, unitCost: i.UNIT_COST })),
+    }));
+
     const [fundRows] = await pool.query('SELECT * FROM fund_transactions ORDER BY TXN_DATE, IDNo');
     const fundTransactions = fundRows.map((f) => ({
       id: f.APP_ID,
@@ -505,7 +548,7 @@ app.get(
     const [hol] = await pool.query('SELECT HOLIDAY_DATE, HOLIDAY_NAME, HOLIDAY_TYPE, ACTIVE FROM holidays ORDER BY HOLIDAY_DATE');
     const holidays = hol.map((h) => ({ date: h.HOLIDAY_DATE, name: h.HOLIDAY_NAME, type: h.HOLIDAY_TYPE, active: !!h.ACTIVE }));
 
-    res.json({ rates, reservations, settlements, voucherSales, agents: await listAgents(), fundTransactions, holidays });
+    res.json({ rates, reservations, settlements, voucherSales, agents: await listAgents(), fundTransactions, holidays, purchases });
   })
 );
 
@@ -698,6 +741,26 @@ app.delete(
   })
 );
 
+// ---------------------------------------------------------------- clear all data
+// Sidebar "Clear data": deletes every booking, voucher purchase, payment to the hotel and fund
+// entry for good (charges / payments go with their booking or purchase — ON DELETE CASCADE).
+// Room rates, room types, add-on prices, agents, holidays and users are kept.
+app.post(
+  '/api/clear-data',
+  route(async (req, res) => {
+    if (!req.body || req.body.confirm !== 'DELETE') return res.status(400).json({ error: 'send { "confirm": "DELETE" }' });
+    const deleted = {};
+    await inTransaction(async (conn) => {
+      for (const table of ['booking_charges', 'booking_payments', 'booking', 'voucher_sale_items', 'voucher_sale_payments', 'voucher_sales', 'hotel_payments', 'fund_transactions', 'hotel_purchase_items', 'hotel_purchases']) {
+        const [r] = await conn.query(`DELETE FROM \`${table}\``);
+        deleted[table] = r.affectedRows;
+      }
+    });
+    console.log('Clear data —', JSON.stringify(deleted));
+    res.json({ ok: true, deleted });
+  })
+);
+
 // ---------------------------------------------------------------- payments to the hotel
 // Replaces all payments of one settlement month (YYYY-MM).
 app.put(
@@ -837,6 +900,57 @@ app.delete(
   '/api/vouchers/:id',
   route(async (req, res) => {
     await pool.query('UPDATE voucher_sales SET ACTIVE = 0 WHERE APP_ID = ?', [req.params.id]);
+    res.json({ ok: true });
+  })
+);
+
+// ---------------------------------------------------------------- hotel purchases (inventory)
+// Stock Jupiter buys from the hotel at the wholesale rate: room-nights per room type, and vouchers.
+// Create or update one purchase (by its app id); its lines are replaced as a whole.
+app.put(
+  '/api/purchases/:id',
+  route(async (req, res) => {
+    const p = req.body || {};
+    const id = String(req.params.id).slice(0, 50);
+    const items = (p.items || []).filter((i) => Number(i.qty) > 0 && i.item);
+    if (!p.date || !/^\d{4}-\d{2}-\d{2}$/.test(p.date)) return res.status(400).json({ error: 'date is required' });
+    if (!items.length) return res.status(400).json({ error: 'Add at least one item' });
+
+    await inTransaction(async (conn) => {
+      const vals = [p.date, p.reference ? String(p.reference).slice(0, 100) : null, p.remarks ? String(p.remarks).slice(0, 500) : null];
+      const [found] = await conn.query('SELECT IDNo FROM hotel_purchases WHERE APP_ID = ?', [id]);
+      let purchaseId;
+      if (found.length) {
+        purchaseId = found[0].IDNo;
+        await conn.query('UPDATE hotel_purchases SET PURCHASE_DATE = ?, REFERENCE = ?, REMARKS = ?, ACTIVE = 1 WHERE IDNo = ?', [...vals, purchaseId]);
+      } else {
+        const [ins] = await conn.query('INSERT INTO hotel_purchases (PURCHASE_DATE, REFERENCE, REMARKS, APP_ID, CREATED_BY) VALUES (?, ?, ?, ?, ?)', [
+          ...vals,
+          id,
+          SYSTEM_USER,
+        ]);
+        purchaseId = ins.insertId;
+      }
+      await conn.query('DELETE FROM hotel_purchase_items WHERE PURCHASE_ID = ?', [purchaseId]);
+      await conn.query('INSERT INTO hotel_purchase_items (PURCHASE_ID, ITEM_KIND, ITEM_CODE, QTY, UNIT_COST) VALUES ?', [
+        items.map((i) => [
+          purchaseId,
+          i.kind === 'voucher' ? 'voucher' : 'room',
+          String(i.item).slice(0, 50),
+          Math.round(Number(i.qty)),
+          Math.max(0, Number(i.unitCost) || 0),
+        ]),
+      ]);
+    });
+    res.json({ ok: true });
+  })
+);
+
+// Delete = soft delete (ACTIVE = 0).
+app.delete(
+  '/api/purchases/:id',
+  route(async (req, res) => {
+    await pool.query('UPDATE hotel_purchases SET ACTIVE = 0 WHERE APP_ID = ?', [req.params.id]);
     res.json({ ok: true });
   })
 );

@@ -1,8 +1,15 @@
 import React from 'react';
+import { Ticket } from 'lucide-react';
+import { FolioCharge } from '../types/hotel';
+import { chargeAmount } from '../utils/billing';
 import { NightRate, formatLongDate, nightsLabel } from '../utils/hotelHelpers';
 
-/** Night-by-night rate table + totals (room rate, holiday surcharge, manual adjustment, total). */
-export const StayBreakdown: React.FC<{ nightly: NightRate[]; amount: number; en: boolean }> = ({ nightly, amount, en }) => {
+/**
+ * Night-by-night rate table + totals (room rate, holiday surcharge, manual adjustment, total).
+ * `extras` (vouchers) are listed in the same table and added to the total.
+ */
+export const StayBreakdown: React.FC<{ nightly: NightRate[]; amount: number; en: boolean; extras?: FolioCharge[] }> = ({ nightly, amount, en, extras = [] }) => {
+  const extrasTotal = extras.reduce((a, c) => a + chargeAmount(c), 0);
   const base = nightly.reduce((a, n) => a + n.baseRate, 0);
   const listTotal = nightly.reduce((a, n) => a + n.listRate, 0);
   const rateTotal = nightly.reduce((a, n) => a + n.rate, 0);
@@ -17,10 +24,10 @@ export const StayBreakdown: React.FC<{ nightly: NightRate[]; amount: number; en:
       <div className="rounded-xl border border-line overflow-hidden">
         <table className="dtable">
           <thead>
-            <tr>
-              <th>{en ? 'Night' : '날짜'}</th>
+            <tr className="[&>th]:!bg-accent-soft [&>th]:!text-accent">
+              <th>{en ? 'Date' : '날짜'}</th>
               <th>{en ? 'Rate type' : '요금 구분'}</th>
-              <th className="r">{en ? 'Rate' : '요금'}</th>
+              <th className="r">{en ? 'Rate per night' : '1박 요금'}</th>
             </tr>
           </thead>
           <tbody>
@@ -40,6 +47,23 @@ export const StayBreakdown: React.FC<{ nightly: NightRate[]; amount: number; en:
                 </td>
                 <td className="r num whitespace-nowrap">
                   <NightRateText n={n} />
+                </td>
+              </tr>
+            ))}
+            {extras.map((c) => (
+              <tr key={c.id} className="[&>td]:!bg-warn-soft">
+                <td className="whitespace-nowrap">
+                  <span className="inline-flex items-center gap-2 font-medium text-warn">
+                    <Ticket className="w-3.5 h-3.5" />
+                    {c.description}
+                  </span>
+                </td>
+                <td className="num text-muted whitespace-nowrap">
+                  {c.qty} × ₱{c.unitPrice.toLocaleString()}
+                  {c.free && <span className="badge badge-ok !h-5 !text-[10.5px] ml-1.5 font-sans">{en ? 'Free' : '무료'}</span>}
+                </td>
+                <td className="r num whitespace-nowrap">
+                  <ChargeAmountText qty={c.qty} unitPrice={c.unitPrice} free={c.free} />
                 </td>
               </tr>
             ))}
@@ -72,9 +96,15 @@ export const StayBreakdown: React.FC<{ nightly: NightRate[]; amount: number; en:
             </span>
           </div>
         )}
+        {extras.length > 0 && (
+          <div className="flex justify-between">
+            <span className="text-muted">{en ? 'Vouchers' : '바우처'}</span>
+            <span className="num text-ink-2">{extrasTotal ? `+₱${extrasTotal.toLocaleString()}` : en ? 'Free' : '무료'}</span>
+          </div>
+        )}
         <div className="flex items-baseline justify-between pt-2 mt-1 border-t border-line">
           <span className="font-semibold text-ink">{en ? 'Total amount' : '총 결제 금액'}</span>
-          <span className="num text-[20px] font-bold text-ink">₱{amount.toLocaleString()}</span>
+          <span className="num text-[20px] font-bold text-ink">₱{(amount + extrasTotal).toLocaleString()}</span>
         </div>
       </div>
     </div>

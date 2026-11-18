@@ -155,7 +155,7 @@ export const RoomRatesMaintenance: React.FC<RoomRatesMaintenanceProps> = ({ casi
   const vouchers: { key: VoucherField; name: string; desc: string; Icon: React.ElementType }[] = [
     { key: 'breakfast', name: en ? 'Breakfast voucher' : '조식 바우처', desc: en ? 'Buffet breakfast, per person' : '조식 뷔페 1인 이용권', Icon: Coffee },
     { key: 'dinner', name: en ? 'Dinner voucher' : '석식 바우처', desc: en ? 'Buffet dinner, per person' : '석식 뷔페 1인 이용권', Icon: Utensils },
-    { key: 'extraBed', name: en ? 'Extra bed' : '엑스트라 베드', desc: en ? 'Rollaway bed, per night' : '1박당 추가 요금', Icon: BedDouble },
+    { key: 'extraBed', name: en ? 'Extra bed' : '엑스트라 베드', desc: en ? 'Per night' : '1박당 추가 요금', Icon: BedDouble },
   ];
 
   return (

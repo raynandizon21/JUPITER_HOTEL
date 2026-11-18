@@ -7,6 +7,7 @@ import { folioOf, syncStatus, uid, peso, nowStamp, todayISO, voucherTotals, char
 import { Language, translations } from '../i18n/translations';
 import { PageHeader, Dialog, ConfirmDialog, ComboInput, Pager, toast, Select } from './ui';
 import { VoucherSaleForm, VoucherItemsEditor } from './VoucherSaleForm';
+import { StockWarning } from './StockContext';
 import { HolidaysMaintenance } from './HolidaysMaintenance';
 import { DateFilter } from './DateFilter';
 import { StayBreakdown, NightRateText, ChargeAmountText } from './StayBreakdown';
@@ -919,25 +920,8 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                   </div>
                 </div>
 
-                <StayBreakdown nightly={nightly} amount={formAmount} en={en} />
-
-                {!editingReservation && addonTotal > 0 && (
-                  <div className="rounded-xl border border-line overflow-hidden text-[12.5px]">
-                    {formVouchers.map((c) => (
-                      <div key={c.id} className="flex items-center justify-between px-4 py-2 border-b border-line">
-                        <span className="text-ink-2">{c.description}</span>
-                        <span className="num text-ink">
-                          <span className="text-muted">{c.qty} × {peso(c.unitPrice)} = </span>
-                          <ChargeAmountText qty={c.qty} unitPrice={c.unitPrice} free={c.free} />
-                        </span>
-                      </div>
-                    ))}
-                    <div className="flex items-center justify-between px-4 py-2.5 bg-sunken font-semibold">
-                      <span className="text-ink">{en ? 'Total with vouchers' : '바우처 포함 합계'}</span>
-                      <span className="num text-ink text-[14px]">{peso(formAmount + addonTotal)}</span>
-                    </div>
-                  </div>
-                )}
+                {/* nights and vouchers in one breakdown, one total */}
+                <StayBreakdown nightly={nightly} amount={formAmount} en={en} extras={editingReservation ? [] : formVouchers} />
 
                 {formRemarks && (
                   <div className="text-[12.5px]">
@@ -958,7 +942,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
             </div>
           ) : (
           <form onSubmit={handleSaveReservation}>
-            <div className="px-6 py-4 grid grid-cols-2 gap-x-4 gap-y-3">
+            <div className="px-6 py-3 grid grid-cols-2 gap-x-4 gap-y-2.5">
               <div className="col-span-2">
                 <label className="field-label">{en ? 'Confirmation no. (from hotel)' : '호텔 확인 번호'}</label>
                 <input
@@ -1062,7 +1046,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                           <div>
                             <div className="text-ink font-medium">{en ? 'Room charge' : '객실 요금'}</div>
                             <div className="text-[11.5px] text-muted">
-                              {formRoomType} · {nightsLabel(formNights, en)}
+                              {formRoomType}
                             </div>
                           </div>
                         </div>
@@ -1078,15 +1062,12 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                       </tr>
                     )}
                     {/* one line per night */}
-                    {nightly.map((n, i) => {
+                    {nightly.map((n) => {
                       const natWeekend = n.kind === 'weekend';
                       return (
                         <tr key={n.date} className="text-[12.5px]">
                           <td className="!pl-12">
                             <span className="inline-flex items-center gap-2 whitespace-nowrap">
-                              <span className="w-5 h-5 rounded-full bg-canvas border border-line grid place-items-center text-[10.5px] font-semibold text-muted shrink-0">
-                                {i + 1}
-                              </span>
                               <span className="text-ink-2">{formatLongDate(n.date)}</span>
                               <span className="text-muted">
                                 {new Date(n.date + 'T00:00:00Z').toLocaleDateString(en ? 'en-US' : 'ko-KR', { weekday: 'short', timeZone: 'UTC' })}
@@ -1181,7 +1162,14 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                   </tbody>
                   <tfoot>
                     <tr>
-                      <td colSpan={3}>{en ? 'Total charges' : '총 청구액'}</td>
+                      <td colSpan={3}>
+                        {en ? 'Total charges' : '총 청구액'}
+                        {formNights > 0 && (
+                          <span className="ml-2 inline-grid place-items-center h-5 px-2 rounded-full bg-accent-soft text-accent text-[11px] font-semibold num align-middle">
+                            {en ? nightsLabel(formNights, true) : `${formNights}박`}
+                          </span>
+                        )}
+                      </td>
                       <td className="r num">{peso(formAmount + (editingReservation ? 0 : addonTotal))}</td>
                       <td />
                     </tr>
@@ -1194,6 +1182,16 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                   <VoucherItemsEditor items={formVouchers} setItems={setFormVouchers} date={formCheckIn} casinoRates={casinoRates} en={en} addRowOnly />
                 </div>
               )}
+
+              {/* hotel stock left for this room type / these vouchers (warning only — saving is still allowed) */}
+              <div className="col-span-2 empty:hidden">
+                <StockWarning
+                  en={en}
+                  room={{ id: casinoRates.rooms.find((x) => x.name.toLowerCase() === formRoomType.toLowerCase())?.id ?? null, nights: formNights }}
+                  items={editingReservation ? editingReservation.charges || [] : formVouchers}
+                  exclude={editingReservation ? { reservationId: editingReservation.id } : undefined}
+                />
+              </div>
 
               <div className={editingReservation ? 'col-span-2' : 'col-span-2 sm:col-span-1'}>
                 <div className="flex items-center justify-between mb-1.5">

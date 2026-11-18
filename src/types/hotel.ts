@@ -90,7 +90,27 @@ export interface Settlement {
   payments: FolioPayment[];
 }
 
-export type ActiveModule = 'dashboard' | 'daily' | 'ledger' | 'calendar' | 'maintenance' | 'calculator' | 'agents' | 'fund';
+/** One line of a purchase from the hotel: room-nights of a room type, or vouchers. */
+export interface PurchaseItem {
+  id: string;
+  kind: 'room' | 'voucher';
+  /** room type id (kind 'room') or 'breakfast' | 'dinner' | 'extraBed' (kind 'voucher') */
+  item: string;
+  qty: number;
+  /** wholesale price Jupiter pays the hotel per unit (room-night / voucher); 0 = given free by the hotel */
+  unitCost: number;
+}
+
+/** Stock Jupiter buys from the hotel at the wholesale rate. Guest bookings and voucher sales use it up. */
+export interface HotelPurchase {
+  id: string;
+  date: string; // YYYY-MM-DD — its month is the settlement month with the hotel
+  reference: string; // hotel invoice / reference no.
+  remarks: string;
+  items: PurchaseItem[];
+}
+
+export type ActiveModule = 'dashboard' | 'daily' | 'ledger' | 'calendar' | 'maintenance' | 'calculator' | 'agents' | 'fund' | 'inventory' | 'workflow';
 
 /** Philippine holiday (table `holidays`). */
 export interface Holiday {

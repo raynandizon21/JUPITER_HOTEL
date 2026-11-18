@@ -5,6 +5,7 @@ import { peso, nowStamp, todayISO, uid, voucherTotals, chargeAmount } from '../u
 import { formatLongDate } from '../utils/hotelHelpers';
 import { ChargeAmountText, FreeCheck } from './StayBreakdown';
 import { ComboInput, Select } from './ui';
+import { StockWarning } from './StockContext';
 
 /**
  * Voucher-only purchase (no room booking): guest, date, voucher items, paid now / bill later.
@@ -89,6 +90,9 @@ export const VoucherSaleForm: React.FC<{
         {/* items */}
         <div className="col-span-2">
           <VoucherItemsEditor items={items} setItems={setItems} date={date} casinoRates={casinoRates} en={en} />
+        </div>
+        <div className="col-span-2 empty:hidden">
+          <StockWarning en={en} items={items} exclude={initial ? { voucherSaleId: initial.id } : undefined} />
         </div>
 
         <div className="col-span-2">

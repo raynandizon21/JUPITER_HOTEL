@@ -1,5 +1,5 @@
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDownLeft, ArrowUpRight, Ban, Banknote, Check, FileSpreadsheet, Landmark, Minus, PiggyBank, Plus, Printer, Search, Ticket, Wallet } from 'lucide-react';
+import { ArrowDownLeft, ArrowUpRight, Ban, Banknote, Check, FileSpreadsheet, Landmark, Minus, PiggyBank, Plus, Printer, Scale, Search, Ticket } from 'lucide-react';
 import { CasinoRatesConfig, FolioPayment, FundTxn, PaymentMethod, Reservation, Settlement, VoucherSale } from '../types/hotel';
 import { chargeAmount, escapeHtml as esc, folioOf, peso, nowStamp, printDocument, todayISO, uid, voucherTotals } from '../utils/billing';
 import { formatDateRange, formatLongDate, formatMonth, formatShortDate, getDaysInMonth, nightsLabel } from '../utils/hotelHelpers';
@@ -363,18 +363,26 @@ export const FundPage: React.FC<{
           <div className={`num text-[20px] font-semibold mt-3 leading-none ${cashOnHand < 0 ? 'text-bad' : 'text-ok'}`}>{peso(cashOnHand)}</div>
           <div className="text-[11.5px] text-muted mt-1.5">{en ? 'Count this against the actual cash' : '실제 현금과 대조하세요'}</div>
         </div>
-        <div className="card p-4">
+        {/* period cash flow as a small computation: In − Out = Net (green when positive, red when negative) */}
+        <div className="card p-4 flex flex-col">
           <div className="flex items-center gap-2.5 text-[12px] text-ink-2">
             <span className="w-7 h-7 rounded-[8px] grid place-items-center text-white bg-ink">
-              <Wallet className="w-4 h-4" />
+              <Scale className="w-4 h-4" />
             </span>
             {periodLabel}
           </div>
-          <div className="mt-3 flex items-center gap-4 text-[13px]">
-            <span className="text-ok num font-semibold">+{peso(monthIn)}</span>
-            <span className="text-bad num font-semibold">−{peso(monthOut)}</span>
+          <div className="mt-2.5 grid grid-cols-[1fr_auto] gap-x-3 gap-y-0.5 text-[12px] num">
+            <span className="text-muted font-sans">{en ? 'Money in' : '입금'}</span>
+            <span className="text-right text-ink-2">+{peso(monthIn)}</span>
+            <span className="text-muted font-sans">{en ? 'Money out' : '출금'}</span>
+            <span className="text-right text-ink-2">−{peso(monthOut)}</span>
+            <span className="col-span-2 border-t border-line my-1" />
+            <span className="text-ink font-semibold font-sans">{en ? 'Net' : '순증감'}</span>
+            <span className={`text-right text-[15px] font-semibold leading-none ${monthIn - monthOut < 0 ? 'text-bad' : monthIn - monthOut > 0 ? 'text-ok' : 'text-ink'}`}>
+              {monthIn - monthOut < 0 ? '−' : ''}
+              {peso(Math.abs(monthIn - monthOut))}
+            </span>
           </div>
-          <div className="text-[11.5px] text-muted mt-1.5">{en ? 'In / out in this period' : '기간 내 입금 / 출금'}</div>
         </div>
       </div>
 

@@ -10,7 +10,7 @@ interface LanguageSelectorProps {
 }
 
 const languages: { code: Language; label: string; native: string; flag: string; short: string }[] = [
-  { code: 'en', label: 'English', native: 'English (PH)', flag: '🇵🇭', short: 'EN' },
+  { code: 'en', label: 'English', native: 'English (US)', flag: '🇺🇸', short: 'EN' },
   { code: 'ko', label: 'Korean', native: '한국어', flag: '🇰🇷', short: 'KO' },
 ];
 
@@ -85,15 +85,18 @@ export const LanguageSelector: React.FC<LanguageSelectorProps> = ({ currentLangu
 const Flag: React.FC<{ code: Language; className?: string }> = ({ code, className = '' }) => (
   <svg viewBox="0 0 30 20" className={`shrink-0 rounded-[3px] ring-1 ring-black/10 ${className}`} aria-hidden>
     {code === 'en' ? (
-      // Philippines
+      // United States
       <>
-        <rect width="30" height="10" fill="#0038a8" />
-        <rect y="10" width="30" height="10" fill="#ce1126" />
-        <path d="M0 0 L17.3 10 L0 20 Z" fill="#fff" />
-        <circle cx="6" cy="10" r="2.3" fill="#fcd116" />
-        <circle cx="1.8" cy="2.4" r="0.8" fill="#fcd116" />
-        <circle cx="1.8" cy="17.6" r="0.8" fill="#fcd116" />
-        <circle cx="14.3" cy="10" r="0.8" fill="#fcd116" />
+        <rect width="30" height="20" fill="#fff" />
+        {Array.from({ length: 7 }, (_, i) => (
+          <rect key={i} y={(i * 2 * 20) / 13} width="30" height={20 / 13} fill="#b22234" />
+        ))}
+        <rect width="12" height={(7 * 20) / 13} fill="#3c3b6e" />
+        {Array.from({ length: 4 }, (_, row) =>
+          Array.from({ length: 5 }, (_, col) => (
+            <circle key={`${row}-${col}`} cx={1.4 + col * 2.3} cy={1.4 + row * 2.6} r="0.45" fill="#fff" />
+          ))
+        )}
       </>
     ) : (
       // South Korea

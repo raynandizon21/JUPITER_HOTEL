@@ -30,7 +30,7 @@ const STORAGE_KEY_LANGUAGE = 'hotel_language_v2';
 const OLD_BROWSER_KEYS = ['hotel_reservations_v2', 'hotel_settlements_v1', 'hotel_casino_rates_v2', 'hotel_demo_mixed_payments_v1'];
 
 export default function App() {
-  // 1. Language State (DEFAULT: English 'en' with PH / KOR flags)
+  // 1. Language State (DEFAULT: English 'en' with US / KOR flags)
   const [language, setLanguage] = useState<Language>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_LANGUAGE);

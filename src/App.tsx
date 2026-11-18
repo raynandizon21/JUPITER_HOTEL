@@ -322,6 +322,7 @@ export default function App() {
             settlements={settlements}
             setSettlements={setSettlements}
             purchases={purchases}
+            fundTxns={fundTxns}
             onOpenInventory={() => setActiveModule('inventory')}
             selectedMonth={selectedMonth}
             setSelectedMonth={setSelectedMonth}

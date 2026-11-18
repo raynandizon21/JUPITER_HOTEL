@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { DailySettlement, bookingDays } from './DailySettlement';
-import { Reservation, CasinoRatesConfig, Settlement, PaymentMethod, FolioPayment, VoucherSale, HotelPurchase } from '../types/hotel';
+import { Reservation, CasinoRatesConfig, Settlement, PaymentMethod, FolioPayment, VoucherSale, HotelPurchase, FundTxn } from '../types/hotel';
+import { buildFundEntries } from './FundPage';
 import { itemLabel, purchaseTotal } from '../utils/inventory';
 import { folioOf, voucherTotals, settlementOf, PAYMENT_METHODS, uid, nowStamp, todayISO, printDocument, escapeHtml as esc } from '../utils/billing';
 import { GuestFolio } from './GuestFolio';
@@ -19,6 +20,8 @@ interface DailyDashboardProps {
   setSettlements: React.Dispatch<React.SetStateAction<Settlement[]>>;
   /** stock bought from the hotel — what Jupiter owes the hotel each month */
   purchases: HotelPurchase[];
+  /** Fund cash ins / cash outs — to know how much cash / bank money each fund has */
+  fundTxns: FundTxn[];
   onOpenInventory: () => void;
   selectedMonth: string;
   setSelectedMonth: (month: string) => void;
@@ -61,6 +64,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
   settlements,
   setSettlements,
   purchases,
+  fundTxns,
   onOpenInventory,
   selectedMonth,
   setSelectedMonth,
@@ -187,6 +191,23 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
     0
   );
   const overPay = payAmount > maxPay;
+  // what the chosen fund holds on the side of the chosen method (Cash vs Bank / e-wallet); when editing,
+  // this payment's own old amount is added back if it came from the same side
+  const payIsCash = payMethod === 'Cash';
+  const sideOf = (m: PaymentMethod) => (m === 'Cash' ? 'cash' : 'other');
+  const fundHolds = useMemo(() => {
+    const b = { room: { cash: 0, other: 0 }, voucher: { cash: 0, other: 0 } };
+    for (const e of buildFundEntries(reservations, voucherSales, settlements, fundTxns, en)) {
+      if (e.voided) continue;
+      b[e.fund][sideOf(e.method)] += e.dir === 'in' ? e.amount : -e.amount;
+    }
+    return b;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reservations, voucherSales, settlements, fundTxns, en]);
+  const available =
+    fundHolds[payFund][payIsCash ? 'cash' : 'other'] +
+    (editingPay && (editingPay.fund === 'voucher' ? 'voucher' : 'room') === payFund && sideOf(editingPay.method) === (payIsCash ? 'cash' : 'other') ? editingPay.amount : 0);
+  const shortOfMoney = payAmount > Math.max(available, 0);
 
   const editHotelPayment = (p: FolioPayment) => {
     setEditingPay(p);
@@ -197,7 +218,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
   const [confirmPay, setConfirmPay] = useState<{ kind: 'add' | 'edit' | 'delete'; pay: FolioPayment } | null>(null);
 
   const addHotelPayment = () => {
-    if (payAmount <= 0 || overPay) return;
+    if (payAmount <= 0 || overPay || shortOfMoney) return;
     if (editingPay) {
       setConfirmPay({ kind: 'edit', pay: editingPay });
       return;
@@ -930,8 +951,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
             <div>
               <label className="field-label">{en ? 'Method' : '지급 수단'}</label>
               <Select value={payMethod} onChange={(e) => setPayMethod(e.target.value as PaymentMethod)} className="input">
-                {/* Cash only for now; an old payment made another way still shows its method so it can be changed */}
-                {PAYMENT_METHODS.filter((m) => m === 'Cash' || (editingPay && m === editingPay.method)).map((m) => (
+                {PAYMENT_METHODS.filter((m) => m !== 'Junket Account').map((m) => (
                   <option key={m}>{m}</option>
                 ))}
               </Select>
@@ -966,15 +986,26 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
                   inputMode="numeric"
                   value={payAmount.toLocaleString('en-US')}
                   onChange={(e) => setPayAmount(parseInt(e.target.value.replace(/\D/g, ''), 10) || 0)}
-                  className={`input num pl-7 text-[15px] font-semibold ${overPay ? '!border-bad' : ''}`}
+                  className={`input num pl-7 text-[15px] font-semibold ${overPay || shortOfMoney ? '!border-bad' : ''}`}
                 />
               </div>
               {overPay ? (
                 <div className="text-[11.5px] text-bad mt-1">
                   {en ? `Cannot be more than the bill. Max ${php(maxPay)}` : `청구액을 초과할 수 없습니다. 최대 ${php(maxPay)}`}
                 </div>
+              ) : shortOfMoney ? (
+                <div className="text-[11.5px] text-bad mt-1">
+                  {en
+                    ? `Not enough ${payIsCash ? 'cash' : 'bank / e-wallet money'} in the ${payFund === 'voucher' ? 'Voucher' : 'Room'} fund: only ${php(Math.max(available, 0))}. Pick another method or lower the amount.`
+                    : `${payFund === 'voucher' ? '바우처' : '객실'} 자금의 ${payIsCash ? '현금' : '은행·전자'} 잔액 부족: ${php(Math.max(available, 0))}. 다른 수단을 선택하거나 금액을 줄이세요.`}
+                </div>
               ) : (
-                <div className="text-[11.5px] text-muted mt-1">{en ? `Max ${php(maxPay)}` : `최대 ${php(maxPay)}`}</div>
+                <div className="text-[11.5px] text-muted mt-1">
+                  {en ? `Max ${php(maxPay)}` : `최대 ${php(maxPay)}`} ·{' '}
+                  {en
+                    ? `${payFund === 'voucher' ? 'Voucher' : 'Room'} fund has ${php(Math.max(available, 0))} in ${payIsCash ? 'cash' : 'bank / e-wallet'}`
+                    : `${payFund === 'voucher' ? '바우처' : '객실'} 자금 ${payIsCash ? '현금' : '은행·전자'} ${php(Math.max(available, 0))}`}
+                </div>
               )}
             </div>
             <div className="col-span-2">
@@ -990,7 +1021,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
           </div>
           <div className="px-6 py-4 border-t border-line bg-sunken flex justify-end gap-2">
             <button onClick={() => setPayOpen(false)} className="btn btn-ghost">{en ? 'Cancel' : '취소'}</button>
-            <button onClick={addHotelPayment} disabled={payAmount <= 0 || overPay} className="btn btn-primary">
+            <button onClick={addHotelPayment} disabled={payAmount <= 0 || overPay || shortOfMoney} className="btn btn-primary">
               <CheckCircle2 className="w-4 h-4" />
               {en ? 'Save payment' : '저장'}
             </button>

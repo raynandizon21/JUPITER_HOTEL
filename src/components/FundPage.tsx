@@ -829,16 +829,29 @@ const BalanceCard: React.FC<{ Icon: React.ElementType; tone: 'info' | 'warn'; la
   b,
   en,
 }) => (
-  <div className={`card p-4 ${tone === 'info' ? '!bg-info-soft !border-info-line' : '!bg-warn-soft !border-warn-line'}`}>
-    <div className="flex items-center gap-2.5 text-[12px] text-ink-2">
-      <span className={`w-7 h-7 rounded-[8px] grid place-items-center text-white ${tone === 'info' ? 'bg-info' : 'bg-warn'}`}>
+  <div className={`card p-4 flex flex-col ${tone === 'info' ? '!bg-info-soft !border-info-line' : '!bg-warn-soft !border-warn-line'}`}>
+    {/* name left, total right */}
+    <div className="flex items-center gap-2.5">
+      <span className={`w-7 h-7 rounded-[8px] grid place-items-center text-white shrink-0 ${tone === 'info' ? 'bg-info' : 'bg-warn'}`}>
         <Icon className="w-4 h-4" />
       </span>
-      {label}
+      <span className="text-[12px] text-ink-2">{label}</span>
+      <span className={`ml-auto num text-[20px] font-semibold leading-none ${b.total < 0 ? 'text-bad' : tone === 'info' ? 'text-info' : 'text-warn'}`}>{peso(b.total)}</span>
     </div>
-    <div className={`num text-[20px] font-semibold mt-3 leading-none ${b.total < 0 ? 'text-bad' : tone === 'info' ? 'text-info' : 'text-warn'}`}>{peso(b.total)}</div>
-    <div className="text-[11.5px] text-muted mt-1.5 num">
-      {en ? 'Cash' : '현금'} {peso(b.cash)} · {en ? 'Bank / e-wallet' : '은행·전자'} {peso(b.other)}
+    {/* where the money is: one line each, amounts lined up on the right (red below 0) */}
+    <div className="mt-3 pt-2.5 border-t border-line/70 grid gap-1.5 text-[12px]">
+      {(
+        [
+          [Banknote, en ? 'Cash' : '현금', b.cash],
+          [Landmark, en ? 'Bank / e-wallet' : '은행·전자', b.other],
+        ] as const
+      ).map(([I, name, v]) => (
+        <div key={name} className="flex items-center gap-2">
+          <I className="w-3.5 h-3.5 text-muted" />
+          <span className="text-muted">{name}</span>
+          <span className={`ml-auto num font-semibold ${v < 0 ? 'text-bad' : 'text-ink'}`}>{peso(v)}</span>
+        </div>
+      ))}
     </div>
   </div>
 );

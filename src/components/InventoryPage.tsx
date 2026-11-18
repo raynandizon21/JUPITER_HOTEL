@@ -114,7 +114,7 @@ export const InventoryPage: React.FC<{
       />
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
-        <Card Icon={Receipt} tone="info" label={en ? 'Bought from hotel' : '호텔 구매액'} value={peso(totals.cost)} hint={en ? `${purchases.length} purchases · wholesale` : `구매 ${purchases.length}건 · 도매가`} />
+        <Card Icon={Receipt} tone="info" label={en ? 'Hotel Bill' : '호텔 청구액'} value={peso(totals.cost)} hint={en ? `${purchases.length} purchases · wholesale` : `구매 ${purchases.length}건 · 도매가`} />
         <Card
           Icon={BedDouble}
           tone={totals.roomsLeft < 0 ? 'bad' : 'ok'}

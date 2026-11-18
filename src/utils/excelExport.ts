@@ -128,7 +128,7 @@ export async function exportSettlementExcel(
     ['Statement no.', `SET-${month.replace('-', '')}`],
     ['Settlement period', formatMonth(month)],
     ['Purchases from hotel', purchases.length],
-    ['Bought from hotel', billed, PESO],
+    ['Hotel Bill', billed, PESO],
     ['Paid to hotel', paidToHotel, PESO],
     ['Balance due to hotel', Math.max(billed - paidToHotel, 0), PESO],
     ['Status', billed > 0 && paidToHotel >= billed ? 'SETTLED' : 'OPEN'],

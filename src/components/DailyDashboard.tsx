@@ -258,7 +258,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 mb-4">
         <StatCard
           Icon={Wallet}
-          label={en ? 'Bought from hotel' : '호텔 구매액'}
+          label={en ? 'Hotel Bill' : '호텔 청구액'}
           value={php(s.billed)}
           pill={`${s.purchases} ${en ? (s.purchases === 1 ? 'purchase' : 'purchases') : '건'}`}
           tone="neutral"
@@ -395,7 +395,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
                 <th className="c">{en ? 'Bookings' : '예약'}</th>
                 <th className="c">{en ? 'Nights' : '박수'}</th>
                 <th className="c">{en ? 'Purchases' : '구매'}</th>
-                <th className="r !bg-accent-soft !text-accent">{en ? 'Bought from hotel' : '호텔 구매액'}</th>
+                <th className="r !bg-accent-soft !text-accent">{en ? 'Hotel Bill' : '호텔 청구액'}</th>
                 <th className="r !bg-ok-soft !text-ok">{en ? 'Paid to hotel' : '호텔 지급액'}</th>
                 <th className="r !bg-bad-soft !text-bad">{en ? 'Balance' : '잔액'}</th>
                 <th className="c">{en ? 'Status' : '상태'}</th>

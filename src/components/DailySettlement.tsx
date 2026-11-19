@@ -1,9 +1,10 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { FileSpreadsheet, Receipt, CalendarDays } from 'lucide-react';
 import { CasinoRatesConfig, Reservation, VoucherSale } from '../types/hotel';
 import { chargeAmount, folioOf, peso, voucherTotals } from '../utils/billing';
 import { addDays, formatLongDate, formatShortDate, formatMonth, getDaysInMonth, getDayCategory, getNightlyRates, getStayNights } from '../utils/hotelHelpers';
 import { Language } from '../i18n/translations';
+import { useFitRows } from '../utils/useFitRows';
 import { PageHeader, Dialog, Pager, toast } from './ui';
 import { GuestFolio, FolioStatusBadge } from './GuestFolio';
 import { DateFilter } from './DateFilter';
@@ -191,30 +192,8 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
   const visible = rows;
   // table pagination, opening on the page that holds today.
   // As many normal-height rows as fit the card (no stretched rows, no inner scroll).
-  const areaRef = useRef<HTMLDivElement>(null);
-  const [fitRows, setFitRows] = useState(5);
-  // how many day rows fit between the header and the grand total (measured from the real rows)
-  const measureFit = useRef<() => void>(() => {});
-  useLayoutEffect(() => {
-    const el = areaRef.current;
-    if (!el) return;
-    measureFit.current = () => {
-      const head = el.querySelector('thead')?.getBoundingClientRect().height ?? 52;
-      const foot = el.querySelector('tfoot')?.getBoundingClientRect().height ?? 44;
-      // average row height (a row with badges / "Today" can be a bit taller than the rest)
-      const dayRows = Array.from(el.querySelectorAll('tbody tr:not([data-filler])'));
-      const row = dayRows.length ? dayRows.reduce((sum, r) => sum + r.getBoundingClientRect().height, 0) / dayRows.length : 36;
-      const n = Math.max(3, Math.floor((el.clientHeight - head - foot + 1) / row));
-      setFitRows((prev) => (prev === n ? prev : n));
-    };
-    measureFit.current();
-    // card resized, or the header wraps differently at another width
-    const ro = new ResizeObserver(() => measureFit.current());
-    ro.observe(el);
-    const thead = el.querySelector('thead');
-    if (thead) ro.observe(thead);
-    return () => ro.disconnect();
-  }, []);
+  // rows per page = as many as fit the card; loop-proof (see useFitRows)
+  const [areaRef, fitRows] = useFitRows({ rowSelector: 'tbody tr:not([data-filler])', fallbackRow: 36, initial: 5, deps: [rows] });
   const TABLE_PAGE = fitRows;
   const [tablePage, setTablePage] = useState(0);
   const tablePages = Math.max(1, Math.ceil(visible.length / TABLE_PAGE));
@@ -224,7 +203,6 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dates, TABLE_PAGE]);
   const pageRows = visible.slice(tablePage * TABLE_PAGE, tablePage * TABLE_PAGE + TABLE_PAGE);
-  useLayoutEffect(() => measureFit.current(), [pageRows.length, rows]);
   const dayAll = selectedDate ? reservations.filter((r) => r.checkIn === selectedDate) : [];
   const byView = (r: Reservation) => (view === 'all' ? true : view === 'paid' ? folioOf(r).balance <= 0 : folioOf(r).balance > 0);
   const detail = dayAll.filter(byView);
@@ -401,7 +379,8 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
             </tfoot>
           </table>
         </div>
-        {tablePages > 1 && (
+        {/* always shown (page numbers only when needed) so the table area never jumps in height */}
+        {visible.length > 0 && (
           <Pager page={tablePage} pages={tablePages} total={visible.length} size={TABLE_PAGE} onPage={setTablePage} en={en} unitLabel={en ? 'days' : '일'} />
         )}
       </div>

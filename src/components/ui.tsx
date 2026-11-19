@@ -543,3 +543,44 @@ export const Select: React.FC<{
     </>
   );
 };
+
+/**
+ * Catches a crash in the page below it and shows a small "Something went wrong — Reload" box,
+ * so one broken page never blanks the whole app (React removes everything on an uncaught error).
+ * Give it a `key` that changes on navigation so another page starts fresh.
+ */
+export class ErrorBoundary extends React.Component<{ en?: boolean; full?: boolean; children: React.ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error, info: React.ErrorInfo) {
+    console.error('[ErrorBoundary]', error, info.componentStack);
+  }
+  render() {
+    const { error } = this.state;
+    if (!error) return this.props.children;
+    const en = this.props.en ?? true;
+    return (
+      <div className={`grid place-items-center p-6 ${this.props.full ? 'min-h-screen bg-canvas' : 'flex-1'}`}>
+        <div className="card max-w-md w-full p-6 text-center">
+          <h2 className="text-[15px] font-semibold text-ink">{en ? 'Something went wrong' : '오류가 발생했습니다'}</h2>
+          <p className="mt-1.5 text-[13px] text-muted">
+            {en ? 'This page hit an error. Your saved data is safe.' : '이 페이지에서 오류가 발생했습니다. 저장된 데이터는 안전합니다.'}
+          </p>
+          <pre className="mt-3 text-left text-[11.5px] text-muted bg-canvas rounded-lg p-2 whitespace-pre-wrap break-words max-h-32 overflow-auto">{error.message}</pre>
+          <div className="mt-4 flex justify-center gap-2">
+            {!this.props.full && (
+              <button className="btn btn-outline" onClick={() => this.setState({ error: null })}>
+                {en ? 'Try again' : '다시 시도'}
+              </button>
+            )}
+            <button className="btn btn-primary" onClick={() => window.location.reload()}>
+              {en ? 'Reload' : '새로고침'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+}

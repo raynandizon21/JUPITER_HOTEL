@@ -78,7 +78,8 @@ To check for dead code, run `npx tsc --noEmit --noUnusedLocals --noUnusedParamet
   - stays: `formatDateRange` → "November 1 - 2, 2026";
   - money: `peso()` → "₱19,250".
 - **Every create/update/delete** shows a toast (`toast()` from `src/components/ui.tsx`, top-right).
-- **Tables should fit the screen without inner scrollbars.** Paginate instead (see `Pager` in `DailySettlement.tsx`, which sizes rows to the available height).
+- **Tables should fit the screen without inner scrollbars.** Paginate instead (`Pager`), with rows per page from **`useFitRows`** (`src/utils/useFitRows.ts`). Don't hand-roll row measuring: an average-row-height version looped forever (React error #185, blank white page).
+- **Error boundaries** (`ErrorBoundary` in `ui.tsx`) wrap the app (`main.tsx`) and each page (`App.tsx`), so a crash shows a "Something went wrong — Reload" box instead of a blank page.
 - **Pop-ups** use `Dialog`. Don't add `backdrop-filter`: it made pop-ups laggy.
 - **Text is bilingual EN/KO.** Pass `en` booleans or use `translations` (`src/i18n/translations.ts`, unused keys were pruned).
 - **Printing** goes through `printDocument` (hidden iframe). A pop-up window froze the tab.

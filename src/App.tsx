@@ -16,7 +16,7 @@ import { PH_HOLIDAYS } from './data/phHolidays';
 import { LanguageSelector } from './components/LanguageSelector';
 import jupiterLogo from './logo.jpg';
 import { Home as HomeIcon, Plus } from 'lucide-react';
-import { Toaster, toast } from './components/ui';
+import { ErrorBoundary, Toaster, toast } from './components/ui';
 import { ActiveModule, Agent, FundTxn, Holiday, HotelPurchase, CasinoRatesConfig, FolioCharge, Reservation, Settlement, VoucherSale } from './types/hotel';
 import { migrateReservation, syncStatus } from './utils/billing';
 import { api } from './utils/api';
@@ -583,7 +583,7 @@ export default function App() {
                 {language === 'en' ? 'New Booking' : '새 예약'}
               </button>
             </nav>
-            {renderModule(activeModule)}
+            <ErrorBoundary en={language === 'en'}>{renderModule(activeModule)}</ErrorBoundary>
           </div>
         </main>
       </div>

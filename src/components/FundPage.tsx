@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { ArrowDownLeft, ArrowUpRight, Ban, Banknote, Check, FileSpreadsheet, Landmark, Minus, PiggyBank, Plus, Printer, Scale, Search, Ticket } from 'lucide-react';
 import { CasinoRatesConfig, FolioPayment, FundTxn, PaymentMethod, Reservation, Settlement, VoucherSale } from '../types/hotel';
 import { chargeAmount, escapeHtml as esc, folioOf, peso, nowStamp, printDocument, todayISO, uid, voucherTotals } from '../utils/billing';
@@ -6,6 +6,7 @@ import { formatDateRange, formatLongDate, formatMonth, formatShortDate, getDaysI
 import { Language } from '../i18n/translations';
 import { ComboInput, Dialog, PageHeader, Pager, Select, toast } from './ui';
 import { DateFilter } from './DateFilter';
+import { useFitRows } from '../utils/useFitRows';
 import { GuestFolio } from './GuestFolio';
 
 type Fund = 'room' | 'voucher';
@@ -200,23 +201,7 @@ export const FundPage: React.FC<{
       : `${formatShortDate(fFrom)} – ${formatShortDate(fTo)}`;
   const [page, setPage] = useState(0);
   // Rows per page = as many as fit the ledger card (like Daily Settlement), so the page never scrolls.
-  const areaRef = useRef<HTMLDivElement>(null);
-  const [size, setSize] = useState(8);
-  useLayoutEffect(() => {
-    const el = areaRef.current;
-    if (!el) return;
-    const measure = () => {
-      const head = el.querySelector('thead')?.getBoundingClientRect().height ?? 40;
-      const rows = Array.from(el.querySelectorAll('tbody tr'));
-      const row = rows.length ? rows.reduce((a, r) => a + r.getBoundingClientRect().height, 0) / rows.length : 51;
-      const n = Math.max(3, Math.floor((el.clientHeight - head) / row));
-      setSize((prev) => (prev === n ? prev : n));
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+  const [areaRef, size] = useFitRows({ fallbackRow: 51 });
   const [search, setSearch] = useState('');
   const [form, setForm] = useState<null | 'out' | 'opening'>(null);
   const [voiding, setVoiding] = useState<FundTxn | null>(null);

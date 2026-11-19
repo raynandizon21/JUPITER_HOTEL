@@ -1,4 +1,4 @@
-import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { BedDouble, Pencil, Plus, Receipt, Ticket, Trash2 } from 'lucide-react';
 import { CasinoRatesConfig, HotelPurchase, PurchaseItem, Reservation, VoucherSale } from '../types/hotel';
 import { peso, todayISO, uid } from '../utils/billing';
@@ -6,33 +6,8 @@ import { formatLongDate, formatMonth } from '../utils/hotelHelpers';
 import { buildStock, itemLabel, purchaseTotal, VOUCHER_ITEMS, voucherItemLabel } from '../utils/inventory';
 import { Language } from '../i18n/translations';
 import { ConfirmDialog, Dialog, PageHeader, Pager, RowMenu, Select, toast } from './ui';
+import { useFitRows } from '../utils/useFitRows';
 import { FreeCheck } from './StayBreakdown';
-
-/**
- * How many table rows fit in `ref` (no scrollbars — the table pages instead).
- * Uses the tallest row so rows with several lines never overflow.
- */
-function useFitRows(deps: unknown[], fallbackRow = 49) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [fit, setFit] = useState(8);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const measure = () => {
-      const head = el.querySelector('thead')?.getBoundingClientRect().height ?? 40;
-      const rows = Array.from(el.querySelectorAll('tbody tr[data-row]'));
-      const row = rows.length ? Math.max(...rows.map((r) => r.getBoundingClientRect().height)) : fallbackRow;
-      const n = Math.max(2, Math.floor((el.clientHeight - head) / row));
-      setFit((prev) => (prev === n ? prev : n));
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, deps);
-  return [ref, fit] as const;
-}
 
 /**
  * Hotel Purchases: what Jupiter buys from the hotel at the wholesale rate (purchases) and the stock
@@ -77,11 +52,11 @@ export const InventoryPage: React.FC<{
     [purchases, tab]
   );
   // both tables fill their card and page instead of scrolling
-  const [listRef, size] = useFitRows([tab, list.length]);
+  const [listRef, size] = useFitRows({ rowSelector: 'tbody tr[data-row]', fallbackRow: 49, min: 2, deps: [tab, list.length] });
   const pages = Math.max(1, Math.ceil(list.length / size));
   const cur = Math.min(page, pages - 1);
   const pageRows = list.slice(cur * size, cur * size + size);
-  const [stockRef, stockFit] = useFitRows([tab], 33);
+  const [stockRef, stockFit] = useFitRows({ rowSelector: 'tbody tr[data-row]', fallbackRow: 33, min: 2, deps: [tab] });
   const stockPages = Math.max(1, Math.ceil(tabStock.length / stockFit));
   const stockCur = Math.min(stockPage, stockPages - 1);
   const stockRows = tabStock.slice(stockCur * stockFit, stockCur * stockFit + stockFit);

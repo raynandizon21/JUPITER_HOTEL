@@ -509,7 +509,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
               <td className={`r num ${due > 0 ? 'text-bad font-semibold' : 'text-muted'}`}>{peso(due)}</td>
               <td className="r num text-ink-2">{hotelCost === undefined ? z : hotelCost === 0 ? comp : peso(hotelCost)}</td>
               <td className="r num text-ink-2">{share.room ? peso(share.room) : z}</td>
-              <td className="r">
+              <td className="c">
                 <button onClick={() => setFolioId(res.id)} className="icon-btn" title={en ? 'Billing' : '청구서'}>
                   <Receipt className="w-3.5 h-3.5" />
                 </button>
@@ -669,7 +669,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                           <td className="r num text-ink-2">{x.c.free ? comp : peso(x.c.unitPrice)}</td>
                           <td className="r num text-ink-2">{cost === null ? z : cost === 0 ? comp : peso(cost)}</td>
                           <td className="r num font-semibold text-ink">{peso(chargeAmount(x.c))}</td>
-                          <td className="r">
+                          <td className="c">
                             {x.resId && (
                               <button onClick={() => setFolioId(x.resId)} className="icon-btn" title={en ? 'Billing' : '청구서'}>
                                 <Receipt className="w-3.5 h-3.5" />

@@ -301,7 +301,7 @@ export async function exportSettlementExcel(
  */
 export async function exportDailyExcel(
   month: string,
-  rows: { date: string; checkIns: number; inHouse: number; nights: number; total: number; roomAmount: number; hotelAmount: number; extrasAmount: number; paid: number; paidAmount: number; unpaid: number; unpaidAmount: number; voucherAmount: number }[],
+  rows: { date: string; checkIns: number; inHouse: number; nights: number; total: number; roomAmount: number; hotelAmount: number; hotelAll: number; junketAll: number; extrasAmount: number; paid: number; paidAmount: number; unpaid: number; unpaidAmount: number; voucherAmount: number }[],
   roomsInUse: number
 ) {
   const ExcelJS = (await import('exceljs')).default;
@@ -351,7 +351,7 @@ export async function exportDailyExcel(
   const fmts = ['d-mmm-yy', '0"건"', PESO, PESO, PESO, PESO, PESO, PESO, PESO];
   rows.forEach((r, i) => {
     const row = ws.getRow(7 + i);
-    row.values = [toDate(r.date), r.inHouse, r.extrasAmount, r.total, r.paidAmount, r.unpaidAmount, r.hotelAmount, r.roomAmount, r.voucherAmount];
+    row.values = [toDate(r.date), r.inHouse, r.extrasAmount, r.total, r.paidAmount, r.unpaidAmount, r.hotelAll, r.junketAll, r.voucherAmount];
     row.eachCell({ includeEmpty: true }, (c, col) => {
       c.numFmt = fmts[col - 1];
       c.border = { top: thin, bottom: thin, left: thin, right: thin };
@@ -360,7 +360,7 @@ export async function exportDailyExcel(
       if (col === 4 && r.total) c.font = { bold: true };
       if (col === 5 && r.paidAmount) c.font = { color: { argb: 'FF2E7A57' }, bold: true };
       if (col === 6 && r.unpaidAmount) c.font = { color: { argb: 'FFB4372C' }, bold: true };
-      if (col === 7 && r.hotelAmount) c.font = { color: { argb: 'FF6A48C2' } };
+      if (col === 7 && r.hotelAll) c.font = { color: { argb: 'FF6A48C2' } };
       if (col === 9 && r.voucherAmount) c.font = { color: { argb: 'FFA86A12' }, bold: true };
     });
     if (r.checkIns) row.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE9EFFC' } };

@@ -1344,7 +1344,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                               <input
                                 type="checkbox"
                                 checked={hotelComp}
-                                disabled={roomBuy.free}
+                                disabled={roomBuy.free && roomBuy.compQty < roomBuy.qty /* cost typed ₱0 = every night free */}
                                 onChange={() => toggleHotelComp(n.date)}
                                 title={en ? 'Complimentary from the hotel — ₱0 to Jupiter' : '호텔 무료 제공 — 주피터 ₱0'}
                                 className="w-4 h-4 accent-[#2e7a57] cursor-pointer align-middle"

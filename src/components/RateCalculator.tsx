@@ -5,6 +5,7 @@ import { getNightlyRates, addDays, formatLongDate, formatDateRange, nightsLabel 
 import { ArrowRight, Utensils, Coffee, BedDouble, Minus, Plus } from 'lucide-react';
 import { Language } from '../i18n/translations';
 import { PageHeader, Select } from './ui';
+import { DateFilter } from './DateFilter';
 
 interface RateCalculatorProps {
   casinoRates: CasinoRatesConfig;
@@ -153,22 +154,23 @@ export const RateCalculator: React.FC<RateCalculatorProps> = ({
                 ))}
               </Select>
             </div>
-            <div>
-              <label className="field-label">{en ? 'Check-in' : '체크인'}</label>
-              <input
-                type="date"
-                value={checkIn}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setCheckIn(v);
-                  if (v && (!checkOut || checkOut <= v)) setCheckOut(addDays(v, 1));
+            {/* one stay picker: click the check-in day, then the check-out day */}
+            <div className="col-span-2">
+              <label className="field-label">{en ? 'Stay (check-in – check-out)' : '숙박 (체크인 – 체크아웃)'}</label>
+              <DateFilter
+                stay
+                en={en}
+                mode="range"
+                onMode={() => {}}
+                date={checkIn}
+                onDate={() => {}}
+                from={checkIn}
+                to={checkOut}
+                onRange={(a, b) => {
+                  setCheckIn(a);
+                  setCheckOut(b > a ? b : addDays(a, 1));
                 }}
-                className="input num"
               />
-            </div>
-            <div>
-              <label className="field-label">{en ? 'Check-out' : '체크아웃'}</label>
-              <input type="date" min={checkIn ? addDays(checkIn, 1) : undefined} value={checkOut} onChange={(e) => setCheckOut(e.target.value)} className="input num" />
             </div>
             <div className="col-span-2">
               <label className="field-label">{en ? 'Occupancy' : '투숙 인원'}</label>

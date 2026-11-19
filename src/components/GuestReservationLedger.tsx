@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Agent, Holiday, Reservation, CasinoRatesConfig, PaymentStatus, VoucherSale, FolioCharge } from '../types/hotel';
+import { Agent, Holiday, Reservation, CasinoRatesConfig, PaymentStatus, VoucherSale, FolioCharge, HotelPurchase } from '../types/hotel';
 import { getReferenceMonth, exportToCSV, getNightlyRates, addDays, formatLongDate, formatMonth, formatDateRange, nightsLabel, getStayNights, getDaysInMonth } from '../utils/hotelHelpers';
 import { Plus, Search, Download, Pencil, Trash2, Sparkles, Receipt, Ticket, BedDouble, Settings2, CircleCheck, CircleX } from 'lucide-react';
 import { GuestFolio, FolioStatusBadge } from './GuestFolio';
@@ -10,7 +10,9 @@ import { VoucherSaleForm, VoucherItemsEditor } from './VoucherSaleForm';
 import { StockWarning } from './StockContext';
 import { HolidaysMaintenance } from './HolidaysMaintenance';
 import { DateFilter } from './DateFilter';
-import { StayBreakdown, NightRateText, ChargeAmountText } from './StayBreakdown';
+import { NightRateText, ChargeAmountText } from './StayBreakdown';
+import { HotelCostInput, BuyLine, linkedPurchaseId, HG, lastCostOf } from './HotelCostSection';
+import { chargeStockItem, itemLabel, stockKey } from '../utils/inventory';
 
 interface GuestReservationLedgerProps {
   /** Agents file maintenance list (suggestions for the Agent field). */
@@ -44,6 +46,9 @@ interface GuestReservationLedgerProps {
   highlightId?: string | null;
   /** Tab to show when the ledger opens (e.g. after a voucher purchase from New Booking). */
   initialTab?: 'rooms' | 'vouchers';
+  /** Purchases from the hotel — a booking can record its own (Jupiter's cost) when it is saved. */
+  purchases?: HotelPurchase[];
+  setPurchases?: React.Dispatch<React.SetStateAction<HotelPurchase[]>>;
 }
 
 export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
@@ -67,6 +72,8 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
   onVoucherCreated,
   highlightId,
   initialTab,
+  purchases = [],
+  setPurchases,
 }) => {
   const t = translations[language];
   const [searchTerm, setSearchTerm] = useState('');
@@ -126,6 +133,16 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
   const [amountTouched, setAmountTouched] = useState(false);
   // Save shows a breakdown first; the reservation is only stored after confirming
   const [confirming, setConfirming] = useState(false);
+  // Hotel column: the purchase saved with this booking (Jupiter's cost), per stock key.
+  // noLink = editing an older booking that has no hotel purchase yet: no default costs, and
+  // nothing is recorded unless a cost (or Free) is entered.
+  const [noLink, setNoLink] = useState(false);
+  // typed hotel cost per item: number (0 = free from the hotel) or null = cleared
+  const [buyCosts, setBuyCosts] = useState<Record<string, number | null>>({});
+  // Save was pressed with a hotel cost still empty → highlight it
+  const [buyTried, setBuyTried] = useState(false);
+  // nights the hotel gives complimentary (₱0 in the hotel purchase; the guest side is separate)
+  const [hotelComps, setHotelComps] = useState<string[]>([]);
 
   // Night-by-night charges from the Room Rates master (holiday nights use the weekend rate)
   const nightly = useMemo(() => {
@@ -150,8 +167,6 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
   }, [formCheckIn, formCheckOut, isModalOpen, holidayName]);
 
   const toggleComp = (date: string) => setFormComps((prev) => (prev.includes(date) ? prev.filter((d) => d !== date) : [...prev, date]));
-  const toggleHoliday = (date: string) =>
-    setFormHolidays((prev) => (prev.includes(date) ? prev.filter((d) => d !== date) : [...prev, date]));
 
   const changeCheckIn = (v: string) => {
     setFormCheckIn(v);
@@ -177,6 +192,10 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
     setFormConfirmNo('');
     setFormAgent('');
     setFormKind('room');
+    setNoLink(false);
+    setBuyCosts({});
+    setHotelComps([]);
+    setBuyTried(false);
     setAmountTouched(false);
     setConfirming(false);
     setIsModalOpen(true);
@@ -211,6 +230,20 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
     setFormOic(res.oic || '');
     setFormConfirmNo(res.confirmationNo || '');
     setFormAgent(res.agentName || '');
+    // its own hotel purchase (if it was recorded with the booking): load the costs
+    const linked = purchases.find((p) => p.id === linkedPurchaseId(res.id));
+    setNoLink(!linked);
+    const items = linked?.items || [];
+    const roomCompQty = items.filter((i) => i.kind === 'room' && !i.unitCost).reduce((a, i) => a + i.qty, 0);
+    const hasPaidRoom = items.some((i) => i.kind === 'room' && i.unitCost > 0);
+    setBuyCosts(
+      Object.fromEntries(
+        items.filter((i) => i.kind === 'voucher' || i.unitCost > 0 || !hasPaidRoom).map((i) => [stockKey(i.kind, i.item), i.unitCost])
+      )
+    );
+    // nights cost the same, so which ones are complimentary only matters for the count
+    setHotelComps(hasPaidRoom ? getStayNights(res.checkIn, res.checkOut).slice(0, roomCompQty) : []);
+    setBuyTried(false);
     setAmountTouched(true); // keep the saved amount unless the user recalculates
     setConfirming(false);
     setIsModalOpen(true);
@@ -225,6 +258,104 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
 
   const en = language === 'en';
   const addonTotal = formVouchers.reduce((a, c) => a + chargeAmount(c), 0);
+  // what the guest is billed in total (room + extras)
+  const extrasTotal = editingReservation ? (editingReservation.charges || []).reduce((a, c) => a + chargeAmount(c), 0) : addonTotal;
+  const guestTotal = formAmount + extrasTotal;
+
+  // last wholesale price paid per item — default unit cost for "Bought from hotel"
+  const lastCost = useMemo(() => lastCostOf(purchases), [purchases]);
+  const formRoomId = casinoRates.rooms.find((x) => x.name.toLowerCase() === formRoomType.toLowerCase())?.id ?? null;
+  // quantities follow the booking: nights of its room type + its vouchers
+  const buyLines = useMemo<BuyLine[]>(() => {
+    const need = new Map<string, number>();
+    if (formRoomId && formNights > 0) need.set(stockKey('room', formRoomId), formNights);
+    for (const c of editingReservation ? editingReservation.charges || [] : formVouchers) {
+      const v = chargeStockItem(c);
+      if (v) need.set(stockKey('voucher', v), (need.get(stockKey('voucher', v)) || 0) + c.qty);
+    }
+    return [...need].map(([key, qty]) => {
+      const [kind, item] = key.split(':') as ['room' | 'voucher', string];
+      // typed cost, else the last price paid (not for an older booking without a hotel purchase)
+      const cost = key in buyCosts ? buyCosts[key] : noLink ? null : lastCost.get(key) ?? null;
+      const compQty = kind === 'room' ? hotelComps.filter((d) => nightly.some((n) => n.date === d)).length : 0;
+      // every night complimentary → no price needed
+      const entered = (cost !== null && cost !== undefined) || (compQty > 0 && compQty === qty);
+      return { key, kind, item, qty, compQty, entered, free: entered && !cost, unitCost: cost ?? 0, label: itemLabel({ kind, item }, casinoRates, en) };
+    });
+  }, [formRoomId, formNights, editingReservation, formVouchers, buyCosts, lastCost, noLink, hotelComps, nightly, casinoRates, en]);
+  const buyCost = buyLines.reduce((a, l) => a + (l.qty - l.compQty) * l.unitCost, 0);
+  const toggleHotelComp = (date: string) => setHotelComps((prev) => (prev.includes(date) ? prev.filter((d) => d !== date) : [...prev, date]));
+  const useBuy = !!setPurchases;
+  // older booking, nothing typed in the Hotel column → leave it without a hotel purchase
+  const buySkipped = noLink && buyLines.every((l) => !l.entered);
+  const roomBuy = buyLines.find((l) => l.kind === 'room');
+  const setBuyCost = (key: string, cost: number | null) => setBuyCosts((prev) => ({ ...prev, [key]: cost }));
+  // charges table: border between the Hotel and Guest column groups, and the small 2nd header row
+  // colour per group: Hotel = violet, Guest = green (header, then a light tint down the cells)
+  const { G, SUB, HH, GH, HC, GC } = HG;
+  // Hotel cells of a voucher / extra row: cost per unit + complimentary (₱0) tick
+  const hotelCells = (line?: BuyLine) => (
+    <>
+      <td className={`${HC} c ${G}`}>
+        {useBuy && line && (
+          <input
+            type="checkbox"
+            checked={line.free}
+            onChange={() => setBuyCost(line.key, line.free ? lastCost.get(line.key) ?? null : 0)}
+            title={en ? 'Complimentary from the hotel — ₱0 to Jupiter' : '호텔 무료 제공 — 주피터 ₱0'}
+            className="w-4 h-4 accent-[#2e7a57] cursor-pointer align-middle"
+          />
+        )}
+      </td>
+      <td className={`${HC} c`}>
+        {useBuy && line ? <HotelCostInput en={en} line={line} onCost={setBuyCost} warn={buyTried} /> : <span className="text-faint">—</span>}
+      </td>
+    </>
+  );
+  // editing: the booking's extras (kept in billing) grouped per voucher kind, so each gets its hotel cost
+  const editExtras = useMemo(() => {
+    if (!editingReservation) return [];
+    const m = new Map<string, { key: string; label: string; qty: number; amount: number; line?: BuyLine }>();
+    for (const c of editingReservation.charges || []) {
+      const v = chargeStockItem(c);
+      const key = v ? stockKey('voucher', v) : 'other';
+      const row = m.get(key) ?? {
+        key,
+        label: v ? itemLabel({ kind: 'voucher', item: v }, casinoRates, en) : en ? 'Other extras' : '기타 추가',
+        qty: 0,
+        amount: 0,
+        line: buyLines.find((l) => l.key === key),
+      };
+      row.qty += v ? c.qty : 0;
+      row.amount += chargeAmount(c);
+      m.set(key, row);
+    }
+    return [...m.values()];
+  }, [editingReservation, buyLines, casinoRates, en]);
+
+  // save / remove the booking's own purchase from the hotel (dated on check-in = that month's hotel bill)
+  const syncLinkedPurchase = (res: Reservation) => {
+    if (!setPurchases) return;
+    const id = linkedPurchaseId(res.id);
+    const items = buyLines.flatMap((l) =>
+      [
+        { id: uid(), kind: l.kind, item: l.item, qty: l.qty - l.compQty, unitCost: l.unitCost },
+        { id: uid(), kind: l.kind, item: l.item, qty: l.compQty, unitCost: 0 },
+      ].filter((i) => i.qty > 0)
+    );
+    setPurchases((prev) => {
+      const old = prev.find((p) => p.id === id);
+      if (!items.length || buySkipped) return old ? prev.filter((p) => p.id !== id) : prev;
+      const p: HotelPurchase = {
+        id,
+        date: res.checkIn,
+        reference: res.confirmationNo || old?.reference || '',
+        remarks: `${en ? 'Booking' : '예약'}: ${res.guestName}`.slice(0, 500),
+        items,
+      };
+      return old ? prev.map((x) => (x.id === id ? p : x)) : [p, ...prev];
+    });
+  };
   // nothing to charge (all free / ₱0) → the guest owes nothing, so it is paid in full
   const nothingDue = !editingReservation && formAmount + addonTotal === 0;
   useEffect(() => {
@@ -242,6 +373,17 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
   const handleSaveReservation = (e: React.FormEvent) => {
     e.preventDefault();
     if (!formGuestName.trim() || !formCheckIn || !formCheckOut || formNights < 1 || confirmTaken) return;
+    // ₱0 hotel cost must be ticked Free on purpose (₱0 is how a free item is stored)
+    const noCost = useBuy && !buySkipped ? buyLines.filter((l) => !l.entered) : [];
+    if (noCost.length) {
+      setBuyTried(true);
+      toast(
+        en ? 'Enter the hotel cost' : '호텔 원가를 입력하세요',
+        `${noCost.map((l) => l.label).join(', ')} — ${en ? 'type the hotel price in the Hotel column (0 = free from the hotel)' : '호텔 열에 단가 입력 (0 = 호텔 무료)'}`,
+        'bad'
+      );
+      return;
+    }
     setConfirming(true);
   };
 
@@ -279,6 +421,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
             : r
         ).map((r) => (r.id === editingReservation.id ? syncStatus(r) : r))
       );
+      syncLinkedPurchase({ ...editingReservation, guestName: formGuestName, confirmationNo: formConfirmNo.trim(), checkIn: formCheckIn });
     } else {
       const newRes: Reservation = {
         id: `res-${Date.now()}`,
@@ -306,13 +449,15 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
             : [],
       };
       setReservations((prev) => [syncStatus(newRes), ...prev]);
+      syncLinkedPurchase(newRes);
       setFlashId(newRes.id);
       onCreated?.(newRes);
     }
 
     toast(
       editingReservation ? (en ? 'Reservation updated' : '예약 수정됨') : en ? 'Reservation saved' : '예약 저장됨',
-      `${formGuestName} · ${nightsLabel(formNights, en)} · ${peso(formAmount + (editingReservation ? 0 : addonTotal))}`
+      `${formGuestName} · ${nightsLabel(formNights, en)} · ${peso(formAmount + (editingReservation ? 0 : addonTotal))}` +
+        (useBuy && buyLines.length ? ` · ${en ? 'hotel cost' : '호텔 원가'} ${peso(buyCost)}` : '')
     );
     setConfirming(false);
     setIsModalOpen(false);
@@ -743,6 +888,8 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
           <VoucherSaleForm
             initial={editingVoucher}
             agents={agents}
+            purchases={purchases}
+            setPurchases={setPurchases}
             casinoRates={casinoRates}
             en={en}
             onCancel={() => setEditingVoucher(null)}
@@ -770,6 +917,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
           onCancel={() => setDeletingRes(null)}
           onConfirm={() => {
             setReservations((prev) => prev.filter((r) => r.id !== deletingRes.id));
+            setPurchases?.((prev) => prev.filter((p) => p.id !== linkedPurchaseId(deletingRes.id)));
             toast(en ? 'Reservation deleted' : '예약 삭제됨', deletingRes.guestName, 'bad');
             setDeletingRes(null);
           }}
@@ -830,6 +978,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
           onCancel={() => setDeletingVoucher(null)}
           onConfirm={() => {
             setVoucherSales((prev) => prev.filter((x) => x.id !== deletingVoucher.id));
+            setPurchases?.((prev) => prev.filter((p) => p.id !== linkedPurchaseId(deletingVoucher.id)));
             toast(en ? 'Voucher purchase deleted' : '바우처 구매 삭제됨', deletingVoucher.guestName, 'bad');
             setDeletingVoucher(null);
           }}
@@ -842,7 +991,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
 
       {isModalOpen && (
         <Dialog
-          width="max-w-2xl"
+          width="max-w-4xl"
           title={
             formKind === 'voucher' && !editingReservation
               ? en ? 'New voucher purchase' : '바우처 구매'
@@ -872,6 +1021,8 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
           {formKind === 'voucher' && !editingReservation ? (
             <VoucherSaleForm
               agents={agents}
+              purchases={purchases}
+              setPurchases={setPurchases}
               casinoRates={casinoRates}
               en={en}
               onCancel={() => setIsModalOpen(false)}
@@ -886,8 +1037,8 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
             />
           ) : confirming ? (
             <div>
-              <div className="px-6 py-5 space-y-4 max-h-[65vh] overflow-y-auto">
-                {/* Guest + status */}
+              <div className="px-6 py-4 space-y-3">
+                {/* Guest + stay on two lines */}
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
                     <div className="text-[18px] font-semibold text-ink truncate">{formGuestName}</div>
@@ -896,32 +1047,115 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                       {formAgent.trim() && <span className="text-ink-2">{en ? 'Agent' : '에이전트'}: {formAgent.trim()} · </span>}
                       {formRoomType} · {formOccupancy === 'singleDouble' ? (en ? 'Single / Double' : '1~2인') : en ? 'Triple' : '3인'}
                     </div>
+                    <div className="text-[13px] text-ink-2 mt-0.5">
+                      <b className="text-ink font-semibold">{formatDateRange(formCheckIn, formCheckOut)}</b> · {nightsLabel(formNights, en)}
+                      <span className="text-muted"> · {en ? 'billed in' : '정산 월'} {formatMonth(formCheckIn)}</span>
+                    </div>
                   </div>
-                  <span className={`badge badge-dot ${formPaymentStatus === '결제완료' ? 'badge-ok' : 'badge-bad'}`}>
+                  <span className={`badge badge-dot shrink-0 ${formPaymentStatus === '결제완료' ? 'badge-ok' : 'badge-bad'}`}>
                     {formPaymentStatus === '결제완료' ? t.statusPaid : t.statusUnpaid}
                   </span>
                 </div>
 
-                {/* Stay */}
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="rounded-xl border border-line p-3">
-                    <div className="text-[11.5px] text-muted">{t.lblCheckIn.replace(' *', '')}</div>
-                    <div className="text-[14px] font-semibold text-ink mt-0.5">{formatLongDate(formCheckIn)}</div>
-                  </div>
-                  <div className="rounded-xl border border-line p-3">
-                    <div className="text-[11.5px] text-muted">{t.lblCheckOut.replace(' *', '')}</div>
-                    <div className="text-[14px] font-semibold text-ink mt-0.5">{formatLongDate(formCheckOut)}</div>
-                  </div>
-                  <div className="rounded-xl border border-line p-3">
-                    <div className="text-[11.5px] text-muted">{en ? 'Nights · Ref. month' : '박수 · 기준 월'}</div>
-                    <div className="num text-[14px] font-semibold text-ink mt-0.5">
-                      {formNights} · {formatMonth(formCheckIn)}
-                    </div>
-                  </div>
+                {/* same layout as the form: item · rate ║ hotel ║ guest, one total + margin */}
+                <div className="rounded-xl border border-line overflow-hidden">
+                  <table className="dtable compact">
+                    <thead>
+                      <tr>
+                        <th className="!static">{en ? 'Item' : '항목'}</th>
+                        <th className="!static">{en ? 'Rate' : '요금'}</th>
+                        {useBuy && <th className={`${HH} !static c w-[128px] ${G}`}>{en ? 'Hotel' : '호텔'}</th>}
+                        <th className={`${GH} !static c w-[128px] ${G}`}>{en ? 'Guest' : '손님'}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {nightly.map((n, i) => {
+                        const hotelComp = !!roomBuy && (roomBuy.free || hotelComps.includes(n.date));
+                        return (
+                          <tr key={n.date} className="text-[12.5px] !bg-info-soft/60">
+                            <td>
+                              <span className="inline-flex items-center gap-2 whitespace-nowrap">
+                                <BedDouble className={`w-3.5 h-3.5 text-info ${i ? 'invisible' : ''}`} />
+                                <span className="text-ink-2">{formatLongDate(n.date)}</span>
+                                <span className="text-muted">
+                                  {new Date(n.date + 'T00:00:00Z').toLocaleDateString(en ? 'en-US' : 'ko-KR', { weekday: 'short', timeZone: 'UTC' })}
+                                </span>
+                              </span>
+                            </td>
+                            <td>
+                              <span className={`badge w-[72px] justify-center ${n.kind === 'holiday' ? 'badge-bad' : n.kind === 'weekend' ? 'badge-warn' : 'badge-info'}`}>
+                                {n.kind === 'holiday' ? (en ? 'Holiday' : '공휴일') : n.kind === 'weekend' ? (en ? 'Weekend' : '주말') : en ? 'Weekday' : '평일'}
+                              </span>
+                            </td>
+                            {useBuy && (
+                              <td className={`${HC} c num ${G}`}>
+                                {!roomBuy ? '—' : hotelComp ? <span className="text-ok text-[11.5px]">{en ? 'Complimentary' : '무료'}</span> : peso(roomBuy.unitCost)}
+                              </td>
+                            )}
+                            <td className={`${GC} c num ${G}`}>
+                              <NightRateText n={n} />
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {amountTouched && formAmount !== rateTotal && (
+                        <tr className="text-[12.5px] text-muted">
+                          <td colSpan={2} className="!pl-[34px]">{en ? 'Manual adjustment' : '수동 조정'}</td>
+                          {useBuy && <td className={`${HC} ${G}`} />}
+                          <td className={`${GC} c num ${G}`}>
+                            {formAmount - rateTotal > 0 ? '+' : '−'}
+                            {peso(Math.abs(formAmount - rateTotal))}
+                          </td>
+                        </tr>
+                      )}
+                      {(editingReservation ? editingReservation.charges || [] : formVouchers).map((c) => {
+                        const v = chargeStockItem(c);
+                        const line = v ? buyLines.find((l) => l.key === stockKey('voucher', v)) : undefined;
+                        return (
+                          <tr key={c.id} className="text-[12.5px] !bg-warn-soft/80">
+                            <td>
+                              <span className="inline-flex items-center gap-2">
+                                <Ticket className="w-3.5 h-3.5 text-warn" />
+                                <span className="text-ink-2">{c.description}</span>
+                              </span>
+                            </td>
+                            <td className="num text-muted whitespace-nowrap">
+                              {c.qty} × {peso(c.unitPrice)}
+                            </td>
+                            {useBuy && (
+                              <td className={`${HC} c num ${G}`}>
+                                {!line ? <span className="text-faint">—</span> : line.free ? <span className="text-ok text-[11.5px]">{en ? 'Complimentary' : '무료'}</span> : peso(c.qty * line.unitCost)}
+                              </td>
+                            )}
+                            <td className={`${GC} c num ${G}`}>
+                              <ChargeAmountText qty={c.qty} unitPrice={c.unitPrice} free={c.free} />
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <td colSpan={2}>
+                          <div className="flex items-center gap-2">
+                            {en ? 'Total' : '합계'}
+                            {useBuy && formCurrency === 'PHP' && (
+                              <span className="ml-auto text-[12px] font-normal text-muted">
+                                {en ? 'Margin' : '마진'}{' '}
+                                <b className={`num ${guestTotal - buyCost < 0 ? 'text-bad' : 'text-ok'}`}>
+                                  {guestTotal - buyCost < 0 ? '−' : ''}
+                                  {peso(Math.abs(guestTotal - buyCost))}
+                                </b>
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        {useBuy && <td className={`${HC} c num ${G}`}>{peso(buyCost)}</td>}
+                        <td className={`${GC} c num text-[15px] font-bold ${G}`}>{peso(guestTotal)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
                 </div>
-
-                {/* nights and vouchers in one breakdown, one total */}
-                <StayBreakdown nightly={nightly} amount={formAmount} en={en} extras={editingReservation ? [] : formVouchers} />
 
                 {formRemarks && (
                   <div className="text-[12.5px]">
@@ -1000,8 +1234,8 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                 </div>
               </div>
 
-              {/* Occupancy · Check-in · Check-out on one line */}
-              <div className="col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-x-4 gap-y-3">
+              {/* Occupancy · Stay on one line, half each */}
+              <div className="col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3">
                 <div className="min-w-0">
                   <label className="field-label">{en ? 'Occupancy' : '투숙 인원'}</label>
                   <div className="seg w-full !h-9">
@@ -1013,165 +1247,228 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                     </button>
                   </div>
                 </div>
+                {/* one stay picker: click the check-in day, then the check-out day */}
                 <div className="min-w-0">
-                  <label className="field-label">{t.lblCheckIn}</label>
-                  <input type="date" required value={formCheckIn} onChange={(e) => changeCheckIn(e.target.value)} className="input num" />
-                </div>
-                <div className="min-w-0">
-                  <label className="field-label">{t.lblCheckOut}</label>
-                  <input type="date" required min={formCheckIn ? addDays(formCheckIn, 1) : undefined} value={formCheckOut} onChange={(e) => setFormCheckOut(e.target.value)} className="input num" />
+                  <label className="field-label">{en ? 'Stay (check-in – check-out) *' : '숙박 (체크인 – 체크아웃) *'}</label>
+                  <DateFilter
+                    stay
+                    en={en}
+                    mode="range"
+                    onMode={() => {}}
+                    date={formCheckIn}
+                    onDate={() => {}}
+                    from={formCheckIn}
+                    to={formCheckOut}
+                    onRange={(a, b) => {
+                      changeCheckIn(a);
+                      setFormCheckOut(b > a ? b : addDays(a, 1));
+                    }}
+                  />
                 </div>
               </div>
 
-              {/* Charges — columns: item · rate · free · amount (same look as the billing pop-up) */}
+              {/* Charges — item · rate ║ HOTEL: complimentary · cost ║ GUEST: complimentary · amount */}
               <div className="col-span-2 rounded-xl border border-line overflow-hidden">
                 <table className="dtable compact">
                   <thead>
                     <tr>
-                      <th>{en ? 'Item' : '항목'}</th>
-                      <th>{en ? 'Rate' : '요금'}</th>
-                      <th className="c w-[64px]">{en ? 'Free' : '무료'}</th>
-                      <th className="r w-[120px]">{en ? 'Amount' : '금액'}</th>
-                      <th className="w-9" />
+                      <th rowSpan={2} className="!static align-bottom">{en ? 'Item' : '항목'}</th>
+                      <th rowSpan={2} className="!static align-bottom">{en ? 'Rate' : '요금'}</th>
+                      <th colSpan={2} className={`${HH} !static c !border-b-0 !pb-0 ${G}`}>
+                        {en ? 'Hotel' : '호텔'}
+                      </th>
+                      <th colSpan={2} className={`${GH} !static c !border-b-0 !pb-0 ${G}`}>
+                        {en ? 'Guest' : '손님'}
+                      </th>
+                    </tr>
+                    <tr>
+                      <th className={`${HC} !static c w-[108px] ${SUB} ${G}`} title={en ? 'Complimentary from the hotel — ₱0 to Jupiter' : '호텔 무료 제공 — 주피터 ₱0'}>
+                        {en ? 'Complimentary' : '무료'}
+                      </th>
+                      <th className={`${HC} !static c w-[128px] ${SUB}`}>{en ? 'Cost' : '원가'}</th>
+                      <th className={`${GC} !static c w-[108px] ${SUB} ${G}`} title={en ? 'Complimentary for the guest — ₱0' : '손님 무료 — ₱0'}>
+                        {en ? 'Complimentary' : '무료'}
+                      </th>
+                      <th className={`${GC} !static c w-[128px] ${SUB}`}>{en ? 'Amount' : '금액'}</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {/* room charge */}
-                    <tr className="!bg-info-soft/80">
-                      <td colSpan={3}>
-                        <div className="flex items-center gap-3">
-                          <span className="w-7 h-7 rounded-lg bg-info-line text-info grid place-items-center shrink-0">
-                            <BedDouble className="w-3.5 h-3.5" />
-                          </span>
-                          <div>
-                            <div className="text-ink font-medium">{en ? 'Room charge' : '객실 요금'}</div>
-                            <div className="text-[11.5px] text-muted">
-                              {formRoomType}
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="r num font-semibold text-ink">{peso(formAmount)}</td>
-                      <td />
-                    </tr>
                     {formNights === 0 && (
                       <tr>
-                        <td colSpan={5} className="text-[12.5px] text-bad">
+                        <td colSpan={6} className="text-[12.5px] text-bad">
                           {en ? 'Check-out must be after check-in.' : '체크아웃은 체크인 이후여야 합니다.'}
                         </td>
                       </tr>
                     )}
-                    {/* one line per night */}
-                    {nightly.map((n) => {
+                    {/* room: one line per night — the first carries the room type, one hotel cost box spans all nights */}
+                    {nightly.map((n, i) => {
                       const natWeekend = n.kind === 'weekend';
+                      const hotelComp = !!roomBuy && (roomBuy.free || hotelComps.includes(n.date));
+                      const date = (
+                        <span className="whitespace-nowrap">
+                          <span className="text-ink-2">{formatLongDate(n.date)}</span>{' '}
+                          <span className="text-muted">
+                            {new Date(n.date + 'T00:00:00Z').toLocaleDateString(en ? 'en-US' : 'ko-KR', { weekday: 'short', timeZone: 'UTC' })}
+                          </span>
+                        </span>
+                      );
                       return (
-                        <tr key={n.date} className="text-[12.5px]">
-                          <td className="!pl-12">
-                            <span className="inline-flex items-center gap-2 whitespace-nowrap">
-                              <span className="text-ink-2">{formatLongDate(n.date)}</span>
-                              <span className="text-muted">
-                                {new Date(n.date + 'T00:00:00Z').toLocaleDateString(en ? 'en-US' : 'ko-KR', { weekday: 'short', timeZone: 'UTC' })}
-                              </span>
-
-                            </span>
-                          </td>
+                        <tr key={n.date} className="text-[12.5px] !bg-info-soft/60">
+                          {i === 0 ? (
+                            <td>
+                              <div className="flex items-center gap-3">
+                                <span className="w-7 h-7 rounded-lg bg-info-line text-info grid place-items-center shrink-0">
+                                  <BedDouble className="w-3.5 h-3.5" />
+                                </span>
+                                <div>
+                                  <div className="text-ink font-medium text-[13px]">{formRoomType}</div>
+                                  <div className="text-[11.5px]">{date}</div>
+                                </div>
+                              </div>
+                            </td>
+                          ) : (
+                            <td className="!pl-[50px]">{date}</td>
+                          )}
                           <td>
-                            <span className="inline-flex items-center gap-2.5 whitespace-nowrap">
-                              <span className={`badge w-[68px] justify-center ${n.kind === 'weekday' ? 'badge-info' : n.kind === 'weekend' ? 'badge-warn' : 'badge-bad'}`}>
-                                {n.kind === 'weekday' ? (en ? 'Weekday' : '평일') : n.kind === 'weekend' ? (en ? 'Weekend' : '주말') : en ? 'Holiday' : '공휴일'}
-                              </span>
-                              {!natWeekend && (
-                                <label className="inline-flex items-center gap-1 text-[11.5px] text-ink-2 cursor-pointer" title={en ? 'Charge this night at the weekend (holiday) rate' : '이 날을 공휴일(주말) 요금으로'}>
-                                  <input type="checkbox" checked={n.kind === 'holiday'} onChange={() => toggleHoliday(n.date)} className="w-3.5 h-3.5 accent-[#b4372c] cursor-pointer" />
-                                  {en ? 'Holiday' : '공휴일'}
-                                </label>
-                              )}
+                            {/* day type; holidays come from the Holidays list (⚙) and are charged at the weekend rate */}
+                            <span
+                              className={`badge w-[72px] justify-center ${n.kind === 'holiday' ? 'badge-bad' : natWeekend ? 'badge-warn' : 'badge-info'}`}
+                              title={n.kind === 'holiday' ? `${holidayName.get(n.date) || (en ? 'Holiday' : '공휴일')} — ${en ? 'weekend rate' : '주말 요금'}` : undefined}
+                            >
+                              {n.kind === 'holiday' ? (en ? 'Holiday' : '공휴일') : natWeekend ? (en ? 'Weekend' : '주말') : en ? 'Weekday' : '평일'}
                             </span>
                           </td>
-                          <td className="c">
+                          {/* hotel */}
+                          <td className={`${HC} c ${G}`}>
+                            {useBuy && roomBuy && (
+                              <input
+                                type="checkbox"
+                                checked={hotelComp}
+                                disabled={roomBuy.free}
+                                onChange={() => toggleHotelComp(n.date)}
+                                title={en ? 'Complimentary from the hotel — ₱0 to Jupiter' : '호텔 무료 제공 — 주피터 ₱0'}
+                                className="w-4 h-4 accent-[#2e7a57] cursor-pointer align-middle"
+                              />
+                            )}
+                          </td>
+                          {i === 0 && (
+                            <td rowSpan={nightly.length} className={`${HC} c`}>
+                              {useBuy && roomBuy ? <HotelCostInput en={en} line={roomBuy} onCost={setBuyCost} warn={buyTried} /> : <span className="text-faint">—</span>}
+                            </td>
+                          )}
+                          {/* guest */}
+                          <td className={`${GC} c ${G}`}>
                             <input
                               type="checkbox"
                               checked={n.comp}
                               onChange={() => toggleComp(n.date)}
-                              title={en ? 'Complimentary night — charged ₱0' : '무료 숙박 — ₱0'}
+                              title={en ? 'Complimentary for the guest — ₱0' : '손님 무료 — ₱0'}
                               className="w-4 h-4 accent-[#2e7a57] cursor-pointer align-middle"
                             />
                           </td>
-                          <td className="r num whitespace-nowrap">
+                          <td className={`${GC} c num whitespace-nowrap`}>
                             <NightRateText n={n} />
                           </td>
-                          <td />
                         </tr>
                       );
                     })}
                     {amountTouched && formAmount !== rateTotal && (
                       <tr className="text-[12.5px] text-muted">
-                        <td colSpan={3} className="!pl-12">
+                        <td colSpan={2} className="!pl-12">
                           {en ? 'Manual adjustment' : '수동 조정'}
                         </td>
-                        <td className="r num">
+                        <td className={`${HC} ${G}`} />
+                        <td className={HC} />
+                        <td className={`${GC} ${G}`} />
+                        <td className={`${GC} c num`}>
                           {formAmount - rateTotal > 0 ? '+' : '−'}
                           {peso(Math.abs(formAmount - rateTotal))}
                         </td>
-                        <td />
                       </tr>
                     )}
 
                     {/* vouchers bought with this booking */}
                     {!editingReservation &&
-                      formVouchers.map((c) => (
-                        <tr key={c.id} className="!bg-warn-soft/80">
-                          <td>
-                            <div className="flex items-center gap-3">
-                              <span className="w-7 h-7 rounded-lg bg-warn-line text-warn grid place-items-center shrink-0">
-                                <Ticket className="w-3.5 h-3.5" />
-                              </span>
-                              <div>
-                                <div className="text-ink font-medium">{c.description}</div>
-                                <div className="text-[11.5px] text-muted">{formatLongDate(formCheckIn)}</div>
+                      formVouchers.map((c) => {
+                        const v = chargeStockItem(c);
+                        const line = v ? buyLines.find((l) => l.key === stockKey('voucher', v)) : undefined;
+                        return (
+                          <tr key={c.id} className="!bg-warn-soft/80">
+                            <td>
+                              <div className="flex items-center gap-3">
+                                <span className="w-7 h-7 rounded-lg bg-warn-line text-warn grid place-items-center shrink-0">
+                                  <Ticket className="w-3.5 h-3.5" />
+                                </span>
+                                <div className="min-w-0 text-ink font-medium">{c.description}</div>
+                                <button
+                                  type="button"
+                                  onClick={() => setFormVouchers((prev) => prev.filter((x) => x.id !== c.id))}
+                                  className="icon-btn !w-6 !h-6 ml-auto hover:!text-bad"
+                                  title={en ? 'Remove' : '삭제'}
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
                               </div>
-                            </div>
+                            </td>
+                            <td className="num text-muted whitespace-nowrap">
+                              {c.qty} × {peso(c.unitPrice)}
+                            </td>
+                            {hotelCells(line)}
+                            <td className={`${GC} c ${G}`}>
+                              <input
+                                type="checkbox"
+                                checked={!!c.free}
+                                onChange={() => setFormVouchers((prev) => prev.map((x) => (x.id === c.id ? { ...x, free: !x.free } : x)))}
+                                title={en ? 'Complimentary for the guest — ₱0' : '손님 무료 — ₱0'}
+                                className="w-4 h-4 accent-[#2e7a57] cursor-pointer align-middle"
+                              />
+                            </td>
+                            <td className={`${GC} c num font-semibold text-ink whitespace-nowrap`}>
+                              <ChargeAmountText qty={c.qty} unitPrice={c.unitPrice} free={c.free} />
+                            </td>
+                          </tr>
+                        );
+                      })}
+
+                    {/* editing: the booking's vouchers / extras are in billing — shown here for the hotel cost */}
+                    {editingReservation &&
+                      editExtras.map((x) => (
+                        <tr key={x.key} className="!bg-warn-soft/80 text-[12.5px]">
+                          <td colSpan={2}>
+                            <span className="text-ink font-medium">{x.label}</span>
+                            <span className="text-muted"> · {x.qty ? `× ${x.qty} · ` : ''}{en ? 'in billing' : '청구서'}</span>
                           </td>
-                          <td className="num text-muted whitespace-nowrap">
-                            {c.qty} × {peso(c.unitPrice)}
-                          </td>
-                          <td className="c">
-                            <input
-                              type="checkbox"
-                              checked={!!c.free}
-                              onChange={() => setFormVouchers((prev) => prev.map((x) => (x.id === c.id ? { ...x, free: !x.free } : x)))}
-                              title={en ? 'Complimentary — charged ₱0' : '무료 — ₱0'}
-                              className="w-4 h-4 accent-[#2e7a57] cursor-pointer align-middle"
-                            />
-                          </td>
-                          <td className="r num font-semibold text-ink whitespace-nowrap">
-                            <ChargeAmountText qty={c.qty} unitPrice={c.unitPrice} free={c.free} />
-                          </td>
-                          <td className="r">
-                            <button
-                              type="button"
-                              onClick={() => setFormVouchers((prev) => prev.filter((x) => x.id !== c.id))}
-                              className="icon-btn hover:!text-bad"
-                              title={en ? 'Remove' : '삭제'}
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </td>
+                          {hotelCells(x.line)}
+                          <td className={`${GC} ${G}`} />
+                          <td className={`${GC} c num font-semibold text-ink`}>{peso(x.amount)}</td>
                         </tr>
                       ))}
                   </tbody>
                   <tfoot>
                     <tr>
-                      <td colSpan={3}>
-                        {en ? 'Total charges' : '총 청구액'}
-                        {formNights > 0 && (
-                          <span className="ml-2 inline-grid place-items-center h-5 px-2 rounded-full bg-accent-soft text-accent text-[11px] font-semibold num align-middle">
-                            {en ? nightsLabel(formNights, true) : `${formNights}박`}
-                          </span>
-                        )}
+                      <td colSpan={2}>
+                        <div className="flex items-center gap-2">
+                          {en ? 'Total' : '합계'}
+                          {formNights > 0 && (
+                            <span className="inline-grid place-items-center h-5 px-2 rounded-full bg-accent-soft text-accent text-[11px] font-semibold num">
+                              {en ? nightsLabel(formNights, true) : `${formNights}박`}
+                            </span>
+                          )}
+                          {useBuy && formCurrency === 'PHP' && (
+                            <span className="ml-auto text-[12px] font-normal text-muted">
+                              {en ? 'Margin' : '마진'}{' '}
+                              <b className={`num ${guestTotal - buyCost < 0 ? 'text-bad' : 'text-ok'}`}>
+                                {guestTotal - buyCost < 0 ? '−' : ''}
+                                {peso(Math.abs(guestTotal - buyCost))}
+                              </b>
+                            </span>
+                          )}
+                        </div>
                       </td>
-                      <td className="r num">{peso(formAmount + (editingReservation ? 0 : addonTotal))}</td>
-                      <td />
+                      <td className={`${HC} ${G}`} />
+                      <td className={`${HC} c num`}>{useBuy ? peso(buyCost) : <span className="text-faint">—</span>}</td>
+                      <td className={`${GC} ${G}`} />
+                      <td className={`${GC} c num`}>{peso(guestTotal)}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -1183,7 +1480,9 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                 </div>
               )}
 
-              {/* hotel stock left for this room type / these vouchers (warning only — saving is still allowed) */}
+              {/* hotel stock left for this room type / these vouchers (warning only — saving is still allowed);
+                  not needed when this booking buys its own from the hotel */}
+              {!useBuy && (
               <div className="col-span-2 empty:hidden">
                 <StockWarning
                   en={en}
@@ -1192,6 +1491,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                   exclude={editingReservation ? { reservationId: editingReservation.id } : undefined}
                 />
               </div>
+              )}
 
               <div className={editingReservation ? 'col-span-2' : 'col-span-2 sm:col-span-1'}>
                 <div className="flex items-center justify-between mb-1.5">
@@ -1199,7 +1499,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                   {amountTouched && formAmount !== rateTotal ? (
                     <button type="button" onClick={handleAutoCalculateAmount} className="inline-flex items-center gap-1 text-[12px] font-medium text-accent hover:text-accent-strong cursor-pointer">
                       <Sparkles className="w-3.5 h-3.5" />
-                      {language === 'en' ? `Use room rates (₱${rateTotal.toLocaleString()})` : `요금표 적용 (₱${rateTotal.toLocaleString()})`}
+                      {language === 'en' ? `Use room rates (₱${(rateTotal + extrasTotal).toLocaleString()})` : `요금표 적용 (₱${(rateTotal + extrasTotal).toLocaleString()})`}
                     </button>
                   ) : null}
                 </div>
@@ -1209,14 +1509,20 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                     type="text"
                     inputMode="numeric"
                     required
-                    value={formAmount.toLocaleString('en-US')}
+                    value={guestTotal.toLocaleString('en-US')}
                     onChange={(e) => {
+                      // the box is the total (room + vouchers); typing a total changes the room amount only
                       setAmountTouched(true);
-                      setFormAmount(parseInt(e.target.value.replace(/[^0-9]/g, ''), 10) || 0);
+                      setFormAmount(Math.max(0, (parseInt(e.target.value.replace(/[^0-9]/g, ''), 10) || 0) - extrasTotal));
                     }}
                     className="input num pl-12 text-[15px] font-semibold"
                   />
                 </div>
+                {extrasTotal > 0 && (
+                  <div className="text-[11px] text-muted mt-1 num">
+                    {en ? 'Room' : '객실'} {peso(formAmount)} + {en ? 'vouchers / extras' : '바우처 / 추가'} {peso(extrasTotal)}
+                  </div>
+                )}
               </div>
 
               {editingReservation ? (

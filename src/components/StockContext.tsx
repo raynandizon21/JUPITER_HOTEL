@@ -13,6 +13,9 @@ const StockContext = createContext<{
 
 export const StockProvider = StockContext.Provider;
 
+/** Purchases from the hotel (empty outside the provider). */
+export const usePurchases = (): HotelPurchase[] => useContext(StockContext)?.purchases ?? [];
+
 /**
  * Warning when a booking / voucher sale needs more than is left (it can still be saved).
  * Shown only once the hotel inventory is in use (at least one purchase recorded).

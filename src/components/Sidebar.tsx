@@ -17,7 +17,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeModule, setActiveModule,
   const t = translations[language];
   const en = language === 'en';
 
-  // Overview → Hotel (Jupiter ↔ Hilton: buying) → Guests (Jupiter ↔ guest: selling) → File maintenance
+  // Overview → Guests (Jupiter ↔ guest: selling) → Hotel (Jupiter ↔ Hilton: buying) → File maintenance
   const groups: { label: string; items: { id: ActiveModule; label: string; Icon: React.ElementType }[] }[] = [
     {
       label: en ? 'Overview' : '개요',
@@ -28,18 +28,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeModule, setActiveModule,
       ],
     },
     {
-      label: en ? 'Hotel' : '호텔',
-      items: [
-        { id: 'inventory', label: en ? 'Hotel Purchases' : '호텔 구매', Icon: ShoppingCart },
-        { id: 'maintenance', label: t.navMaintenance, Icon: SlidersHorizontal },
-      ],
-    },
-    {
       label: en ? 'Guests' : '손님',
       items: [
         { id: 'ledger', label: t.navLedger, Icon: BookOpenText },
         { id: 'calendar', label: t.navCalendar, Icon: CalendarDays },
         { id: 'calculator', label: t.navCalculator, Icon: Calculator },
+      ],
+    },
+    {
+      label: en ? 'Hotel' : '호텔',
+      items: [
+        { id: 'inventory', label: en ? 'Hotel Purchases' : '호텔 구매', Icon: ShoppingCart },
+        { id: 'maintenance', label: t.navMaintenance, Icon: SlidersHorizontal },
       ],
     },
     {

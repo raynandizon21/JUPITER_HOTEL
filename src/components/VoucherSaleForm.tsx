@@ -1,14 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
-import { Agent, CasinoRatesConfig, FolioCharge, VoucherSale } from '../types/hotel';
+import { Plus, Ticket, Trash2 } from 'lucide-react';
+import { Agent, CasinoRatesConfig, FolioCharge, HotelPurchase, VoucherSale } from '../types/hotel';
 import { peso, nowStamp, todayISO, uid, voucherTotals, chargeAmount } from '../utils/billing';
-import { formatLongDate } from '../utils/hotelHelpers';
+import { chargeStockItem, itemLabel, stockKey } from '../utils/inventory';
 import { ChargeAmountText, FreeCheck } from './StayBreakdown';
-import { ComboInput, Select } from './ui';
+import { ComboInput, Select, toast } from './ui';
 import { StockWarning } from './StockContext';
+import { DateFilter } from './DateFilter';
+import { BuyLine, HG, HotelCostInput, lastCostOf, linkedPurchaseId } from './HotelCostSection';
 
 /**
- * Voucher-only purchase (no room booking): guest, date, voucher items, paid now / bill later.
+ * Voucher-only purchase (no room booking): guest, date, voucher items (hotel cost | guest price), paid now / bill later.
  * Renders the body + footer of a Dialog; the caller owns the Dialog and saving.
  */
 export const VoucherSaleForm: React.FC<{
@@ -19,7 +21,10 @@ export const VoucherSaleForm: React.FC<{
   onCancel: () => void;
   /** Agents file maintenance list (suggestions for the Agent field). */
   agents?: Agent[];
-}> = ({ initial, casinoRates, en, onSave, onCancel, agents = [] }) => {
+  /** Purchases from the hotel — the voucher sale records its own (Jupiter's cost) when it is saved. */
+  purchases?: HotelPurchase[];
+  setPurchases?: React.Dispatch<React.SetStateAction<HotelPurchase[]>>;
+}> = ({ initial, casinoRates, en, onSave, onCancel, agents = [], purchases = [], setPurchases }) => {
   const [guestName, setGuestName] = useState(initial?.guestName ?? '');
   const [agentName, setAgentName] = useState(initial?.agentName ?? '');
   const [date, setDate] = useState(initial?.date ?? todayISO());
@@ -36,8 +41,46 @@ export const VoucherSaleForm: React.FC<{
     if (nothingDue) setPaidNow(true);
   }, [nothingDue]);
 
+  // ---- Hotel column: what Jupiter pays the hotel for these vouchers (saved as purchase `buy-<saleId>`)
+  const useBuy = !!setPurchases;
+  const linked = initial ? purchases.find((p) => p.id === linkedPurchaseId(initial.id)) : undefined;
+  // editing an older sale without a hotel purchase: no default costs; nothing recorded unless a cost is typed
+  const noLink = !!initial && !linked;
+  const [buyCosts, setBuyCosts] = useState<Record<string, number | null>>(() =>
+    Object.fromEntries((linked?.items || []).map((i) => [stockKey(i.kind, i.item), i.unitCost]))
+  );
+  const [buyTried, setBuyTried] = useState(false);
+  const lastCost = useMemo(() => lastCostOf(purchases), [purchases]);
+  const buyLines = useMemo<BuyLine[]>(() => {
+    const need = new Map<string, number>();
+    for (const c of items) {
+      const v = chargeStockItem(c);
+      if (v) need.set(stockKey('voucher', v), (need.get(stockKey('voucher', v)) || 0) + c.qty);
+    }
+    return [...need].map(([key, qty]) => {
+      const item = key.split(':')[1];
+      const cost = key in buyCosts ? buyCosts[key] : noLink ? null : lastCost.get(key) ?? null;
+      const entered = cost !== null && cost !== undefined;
+      return { key, kind: 'voucher', item, qty, compQty: 0, entered, free: entered && !cost, unitCost: cost ?? 0, label: itemLabel({ kind: 'voucher', item }, casinoRates, en) };
+    });
+  }, [items, buyCosts, noLink, lastCost, casinoRates, en]);
+  const buyCost = buyLines.reduce((a, l) => a + l.qty * l.unitCost, 0);
+  const buySkipped = noLink && buyLines.every((l) => !l.entered);
+  const setBuyCost = (key: string, cost: number | null) => setBuyCosts((prev) => ({ ...prev, [key]: cost }));
+  const { G, SUB, HH, GH, HC, GC } = HG;
+
   const save = () => {
     if (!canSave) return;
+    const noCost = useBuy && !buySkipped ? buyLines.filter((l) => !l.entered) : [];
+    if (noCost.length) {
+      setBuyTried(true);
+      toast(
+        en ? 'Enter the hotel cost' : '호텔 원가를 입력하세요',
+        `${noCost.map((l) => l.label).join(', ')} — ${en ? 'type the hotel price in the Hotel column (0 = free from the hotel)' : '호텔 열에 단가 입력 (0 = 호텔 무료)'}`,
+        'bad'
+      );
+      return;
+    }
     // keep the original payments if they still cover the total exactly; otherwise one payment for the total
     const keep = initial && initialPaid && voucherTotals({ ...initial, items }).balance === 0;
     const payments = paidNow && total > 0
@@ -45,21 +88,32 @@ export const VoucherSaleForm: React.FC<{
         ? initial!.payments
         : [{ id: uid(), date, amount: total, method: 'Cash' as const, reference: en ? 'Paid at purchase' : '구매 시 결제', recordedAt: nowStamp() }]
       : [];
-    onSave({
+    const sale: VoucherSale = {
       id: initial?.id ?? `vch-${Date.now()}`,
       date,
       guestName: guestName.trim(),
       agentName: agentName.trim().replace(/\s+/g, ' '),
       remarks: remarks.trim(),
       items: items.map((c) => ({ ...c, date })), // items carry the purchase date
-
       payments,
-    });
+    };
+    // its purchase from the hotel, dated on the purchase date (= that month's hotel bill)
+    if (setPurchases) {
+      const id = linkedPurchaseId(sale.id);
+      const lines = buyLines.filter((l) => l.qty > 0).map((l) => ({ id: uid(), kind: l.kind, item: l.item, qty: l.qty, unitCost: l.unitCost }));
+      setPurchases((prev) => {
+        const old = prev.find((p) => p.id === id);
+        if (!lines.length || buySkipped) return old ? prev.filter((p) => p.id !== id) : prev;
+        const p: HotelPurchase = { id, date, reference: old?.reference || '', remarks: `${en ? 'Vouchers' : '바우처'}: ${sale.guestName}`.slice(0, 500), items: lines };
+        return old ? prev.map((x) => (x.id === id ? p : x)) : [p, ...prev];
+      });
+    }
+    onSave(sale);
   };
 
   return (
     <>
-      <div className="px-6 py-5 grid grid-cols-2 gap-4 max-h-[65vh] overflow-y-auto">
+      <div className="px-6 py-4 grid grid-cols-2 gap-x-4 gap-y-3">
         {/* Agent · Guest Name · Purchase date on one line (same as the room booking form) */}
         <div className="col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-x-4 gap-y-3">
           <div className="min-w-0">
@@ -83,19 +137,131 @@ export const VoucherSaleForm: React.FC<{
           </div>
           <div className="min-w-0">
             <label className="field-label">{en ? 'Purchase date *' : '구매일 *'}</label>
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="input" />
+            <DateFilter stay en={en} mode="date" onMode={() => {}} date={date} onDate={setDate} from={date} to={date} onRange={() => {}} />
           </div>
         </div>
 
-        {/* items */}
+        {/* items — item · qty × price ║ HOTEL: complimentary · cost ║ GUEST: complimentary · amount */}
+        <div className="col-span-2 rounded-xl border border-line overflow-hidden">
+          <table className="dtable compact">
+            <thead>
+              <tr>
+                <th rowSpan={2} className="!static align-bottom">{en ? 'Voucher' : '바우처'}</th>
+                <th rowSpan={2} className="!static align-bottom">{en ? 'Rate' : '요금'}</th>
+                <th colSpan={2} className={`${HH} !static c !border-b-0 !pb-0 ${G}`}>{en ? 'Hotel' : '호텔'}</th>
+                <th colSpan={2} className={`${GH} !static c !border-b-0 !pb-0 ${G}`}>{en ? 'Guest' : '손님'}</th>
+              </tr>
+              <tr>
+                <th className={`${HC} !static c w-[108px] ${SUB} ${G}`} title={en ? 'Complimentary from the hotel — ₱0 to Jupiter' : '호텔 무료 제공 — 주피터 ₱0'}>
+                  {en ? 'Complimentary' : '무료'}
+                </th>
+                <th className={`${HC} !static c w-[128px] ${SUB}`}>{en ? 'Cost' : '원가'}</th>
+                <th className={`${GC} !static c w-[108px] ${SUB} ${G}`} title={en ? 'Complimentary for the guest — ₱0' : '손님 무료 — ₱0'}>
+                  {en ? 'Complimentary' : '무료'}
+                </th>
+                <th className={`${GC} !static c w-[128px] ${SUB}`}>{en ? 'Amount' : '금액'}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="text-[12.5px] text-muted">
+                    {en ? 'No vouchers yet — add one below.' : '아직 바우처가 없습니다. 아래에서 추가하세요.'}
+                  </td>
+                </tr>
+              )}
+              {items.map((c) => {
+                const v = chargeStockItem(c);
+                const line = v ? buyLines.find((l) => l.key === stockKey('voucher', v)) : undefined;
+                return (
+                  <tr key={c.id} className="!bg-warn-soft/80">
+                    <td>
+                      <div className="flex items-center gap-3">
+                        <span className="w-7 h-7 rounded-lg bg-warn-line text-warn grid place-items-center shrink-0">
+                          <Ticket className="w-3.5 h-3.5" />
+                        </span>
+                        <div className="min-w-0 text-ink font-medium">{c.description}</div>
+                        <button
+                          type="button"
+                          onClick={() => setItems((prev) => prev.filter((x) => x.id !== c.id))}
+                          className="icon-btn !w-6 !h-6 ml-auto hover:!text-bad"
+                          title={en ? 'Remove' : '삭제'}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                    <td className="num text-muted whitespace-nowrap">
+                      {c.qty} × {peso(c.unitPrice)}
+                    </td>
+                    {/* hotel */}
+                    <td className={`${HC} c ${G}`}>
+                      {useBuy && line && (
+                        <input
+                          type="checkbox"
+                          checked={line.free}
+                          onChange={() => setBuyCost(line.key, line.free ? lastCost.get(line.key) ?? null : 0)}
+                          title={en ? 'Complimentary from the hotel — ₱0 to Jupiter' : '호텔 무료 제공 — 주피터 ₱0'}
+                          className="w-4 h-4 accent-[#2e7a57] cursor-pointer align-middle"
+                        />
+                      )}
+                    </td>
+                    <td className={`${HC} c`}>
+                      {useBuy && line ? <HotelCostInput en={en} line={line} onCost={setBuyCost} warn={buyTried} /> : <span className="text-faint">—</span>}
+                    </td>
+                    {/* guest */}
+                    <td className={`${GC} c ${G}`}>
+                      <input
+                        type="checkbox"
+                        checked={!!c.free}
+                        onChange={() => setItems((prev) => prev.map((x) => (x.id === c.id ? { ...x, free: !x.free } : x)))}
+                        title={en ? 'Complimentary for the guest — ₱0' : '손님 무료 — ₱0'}
+                        className="w-4 h-4 accent-[#2e7a57] cursor-pointer align-middle"
+                      />
+                    </td>
+                    <td className={`${GC} c num font-semibold text-ink whitespace-nowrap`}>
+                      <ChargeAmountText qty={c.qty} unitPrice={c.unitPrice} free={c.free} />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            {items.length > 0 && (
+              <tfoot>
+                <tr>
+                  <td colSpan={2}>
+                    <div className="flex items-center gap-2">
+                      {en ? 'Total' : '합계'}
+                      {useBuy && (
+                        <span className="ml-auto text-[12px] font-normal text-muted">
+                          {en ? 'Margin' : '마진'}{' '}
+                          <b className={`num ${total - buyCost < 0 ? 'text-bad' : 'text-ok'}`}>
+                            {total - buyCost < 0 ? '−' : ''}
+                            {peso(Math.abs(total - buyCost))}
+                          </b>
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className={`${HC} ${G}`} />
+                  <td className={`${HC} c num`}>{useBuy ? peso(buyCost) : <span className="text-faint">—</span>}</td>
+                  <td className={`${GC} ${G}`} />
+                  <td className={`${GC} c num`}>{peso(total)}</td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
         <div className="col-span-2">
-          <VoucherItemsEditor items={items} setItems={setItems} date={date} casinoRates={casinoRates} en={en} />
+          <VoucherItemsEditor items={items} setItems={setItems} date={date} casinoRates={casinoRates} en={en} addRowOnly />
         </div>
-        <div className="col-span-2 empty:hidden">
-          <StockWarning en={en} items={items} exclude={initial ? { voucherSaleId: initial.id } : undefined} />
-        </div>
+        {!useBuy && (
+          <div className="col-span-2 empty:hidden">
+            <StockWarning en={en} items={items} exclude={initial ? { voucherSaleId: initial.id } : undefined} />
+          </div>
+        )}
 
-        <div className="col-span-2">
+        <div className="col-span-2 sm:col-span-1">
           <label className="field-label">{en ? 'Guest payment' : '손님 결제'}</label>
           <div className="seg w-full">
             <button type="button" data-active={paidNow} onClick={() => setPaidNow(true)} className="flex-1">
@@ -114,28 +280,19 @@ export const VoucherSaleForm: React.FC<{
           {nothingDue && <div className="text-[11px] text-ok mt-1">{en ? 'Nothing to charge — marked as paid' : '청구 금액 없음 — 결제 완료로 처리'}</div>}
         </div>
 
-        <div className="col-span-2">
+        <div className="col-span-2 sm:col-span-1">
           <label className="field-label">{en ? 'Remarks' : '비고'}</label>
           <input value={remarks} onChange={(e) => setRemarks(e.target.value)} placeholder={en ? 'e.g. For tomorrow’s breakfast' : '예: 내일 조식용'} className="input" />
         </div>
       </div>
 
-      <div className="px-6 py-4 border-t border-line bg-sunken flex items-center justify-between gap-2">
-        <span className="text-[12.5px] text-muted">
-          {items.length > 0 && (
-            <>
-              {formatLongDate(date)} · <span className="num font-semibold text-ink">{peso(total)}</span>
-            </>
-          )}
-        </span>
-        <div className="flex gap-2">
-          <button type="button" onClick={onCancel} className="btn btn-ghost">
-            {en ? 'Cancel' : '취소'}
-          </button>
-          <button type="button" onClick={save} disabled={!canSave} className="btn btn-primary px-5">
-            {initial ? (en ? 'Update vouchers' : '바우처 수정') : en ? 'Save vouchers' : '바우처 저장'}
-          </button>
-        </div>
+      <div className="px-6 py-4 border-t border-line bg-sunken flex items-center justify-end gap-2">
+        <button type="button" onClick={onCancel} className="btn btn-ghost">
+          {en ? 'Cancel' : '취소'}
+        </button>
+        <button type="button" onClick={save} disabled={!canSave} className="btn btn-primary px-5">
+          {initial ? (en ? 'Update vouchers' : '바우처 수정') : en ? 'Save vouchers' : '바우처 저장'}
+        </button>
       </div>
     </>
   );

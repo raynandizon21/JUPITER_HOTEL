@@ -1,7 +1,7 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { CalendarDays, ChevronLeft, ChevronRight, X } from 'lucide-react';
-import { addDays, formatLongDate } from '../utils/hotelHelpers';
+import { addDays, formatDateRange, formatLongDate, nightsLabel } from '../utils/hotelHelpers';
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const ymOf = (d: string) => d.slice(0, 7);
@@ -30,7 +30,10 @@ export const DateFilter: React.FC<{
   en: boolean;
   /** 'md' = 36px tall, to line up with regular .btn buttons (default 'sm' = 30px, next to input-sm) */
   size?: 'sm' | 'md';
-}> = ({ mode, onMode, date, onDate, from, to, onRange, en, size = 'sm' }) => {
+  /** Form field look (full width like .input, 2 months, no mode / presets / clear / ‹ ›).
+   *  mode 'range' = booking stay: from = check-in, to = check-out (at least 1 night); mode 'date' = one day. */
+  stay?: boolean;
+}> = ({ mode, onMode, date, onDate, from, to, onRange, en, size = 'sm', stay = false }) => {
   const h = size === 'md' ? 'h-9' : 'h-[30px]';
   const [open, setOpen] = useState(false);
   const [view, setView] = useState(() => shiftYm(ymOf(mode === 'date' ? date || todayIso() : from || todayIso()), -1)); // left month
@@ -46,8 +49,11 @@ export const DateFilter: React.FC<{
     const place = () => {
       const r = anchor.current?.getBoundingClientRect();
       if (!r) return;
-      const w = Math.min(window.innerWidth - 24, 800);
-      setPos({ position: 'fixed', top: r.bottom + 6, left: Math.max(12, Math.min(r.left, window.innerWidth - w - 12)), width: w, zIndex: 80 });
+      const w = Math.min(window.innerWidth - 24, stay ? 540 : 800);
+      // a stay picker opens above the field when there is no room below
+      const below = window.innerHeight - r.bottom;
+      const top = stay && below < 400 && r.top > below ? Math.max(12, r.top - 6 - 392) : r.bottom + 6;
+      setPos({ position: 'fixed', top, left: Math.max(12, Math.min(r.left, window.innerWidth - w - 12)), width: w, zIndex: 80 });
     };
     place();
     window.addEventListener('resize', place);
@@ -75,7 +81,7 @@ export const DateFilter: React.FC<{
   }, [open]);
 
   const openPicker = () => {
-    setView(shiftYm(ymOf(mode === 'date' ? date || todayIso() : from || todayIso()), mode === 'date' ? -1 : 0));
+    setView(shiftYm(ymOf(mode === 'date' ? date || todayIso() : from || todayIso()), mode === 'date' && !stay ? -1 : 0));
     setStart(null);
     setOpen((o) => !o);
   };
@@ -91,7 +97,7 @@ export const DateFilter: React.FC<{
       return;
     }
     const [a, b] = d < start ? [d, start] : [start, d];
-    onRange(a, b);
+    onRange(a, stay && a === b ? addDays(a, 1) : b);
     setStart(null);
     setOpen(false);
   };
@@ -154,7 +160,7 @@ export const DateFilter: React.FC<{
   // quick picks (whole months)
   const monthOf = (ym: string): [string, string] => [`${ym}-01`, `${ym}-${pad(new Date(Date.UTC(+ym.slice(0, 4), +ym.slice(5, 7), 0)).getUTCDate())}`];
   const presets =
-    mode === 'range'
+    mode === 'range' && !stay
       ? [
           { label: en ? 'This month' : '이번 달', r: monthOf(ymOf(today)) },
           { label: en ? 'Last month' : '지난달', r: monthOf(shiftYm(ymOf(today), -1)) },
@@ -162,8 +168,14 @@ export const DateFilter: React.FC<{
         ]
       : [];
 
-  const label =
-    mode === 'date'
+  const stayNights = from && to ? Math.round((Date.parse(to + 'T00:00:00Z') - Date.parse(from + 'T00:00:00Z')) / 86400000) : 0;
+  const label = stay && mode === 'date'
+    ? date ? formatLongDate(date) : en ? 'Pick a date' : '날짜 선택'
+    : stay
+    ? from && to
+      ? `${formatDateRange(from, to)} · ${nightsLabel(stayNights, en)}`
+      : en ? 'Pick check-in and check-out' : '체크인 · 체크아웃 선택'
+    : mode === 'date'
       ? formatLongDate(date)
       : from && to
       ? from === to
@@ -176,7 +188,7 @@ export const DateFilter: React.FC<{
   return (
     <div className="flex flex-col gap-1">
       {/* mode */}
-      <div className="flex items-center gap-4 text-[12px] text-ink-2 pl-1">
+      <div className={`flex items-center gap-4 text-[12px] text-ink-2 pl-1 ${stay ? 'hidden' : ''}`}>
         {(['date', 'range'] as const).map((m) => (
           <label key={m} className="inline-flex items-center gap-1.5 cursor-pointer">
             <input type="radio" checked={mode === m} onChange={() => onMode(m)} className="accent-[#3567d6] cursor-pointer" />
@@ -186,8 +198,8 @@ export const DateFilter: React.FC<{
       </div>
 
       {/* field */}
-      <div className="flex items-center">
-        {mode === 'date' && (
+      <div className={`flex items-center ${stay ? 'w-full' : ''}`}>
+        {mode === 'date' && !stay && (
           <button type="button" onClick={() => onDate(addDays(date, -1))} className={`${h} w-8 grid place-items-center rounded-l-lg border border-r-0 border-line-strong bg-surface text-muted hover:text-ink cursor-pointer`} aria-label="Previous day">
             <ChevronLeft className="w-4 h-4" />
           </button>
@@ -196,13 +208,17 @@ export const DateFilter: React.FC<{
           ref={anchor}
           type="button"
           onClick={openPicker}
-          className={`${h} px-3 border border-line-strong bg-surface text-[12.5px] inline-flex items-center gap-2 cursor-pointer hover:border-faint min-w-[200px] justify-center ${
-            mode === 'date' ? '' : 'rounded-lg'
-          } ${mode === 'range' && !(from && to) ? 'text-muted' : 'text-ink'}`}
+          className={
+            stay
+              ? `input num !w-full inline-flex items-center gap-2 cursor-pointer text-left ${open ? '!border-ink' : ''} ${(mode === 'date' ? date : from && to) ? 'text-ink' : 'text-muted'}`
+              : `${h} px-3 border border-line-strong bg-surface text-[12.5px] inline-flex items-center gap-2 cursor-pointer hover:border-faint min-w-[200px] justify-center ${
+                  mode === 'date' ? '' : 'rounded-lg'
+                } ${mode === 'range' && !(from && to) ? 'text-muted' : 'text-ink'}`
+          }
         >
           <CalendarDays className="w-3.5 h-3.5 text-muted" />
           {label}
-          {mode === 'range' && from && to && (
+          {mode === 'range' && !stay && from && to && (
             <span
               role="button"
               onClick={(e) => {
@@ -216,7 +232,7 @@ export const DateFilter: React.FC<{
             </span>
           )}
         </button>
-        {mode === 'date' && (
+        {mode === 'date' && !stay && (
           <button type="button" onClick={() => onDate(addDays(date, 1))} className={`${h} w-8 grid place-items-center rounded-r-lg border border-l-0 border-line-strong bg-surface text-muted hover:text-ink cursor-pointer`} aria-label="Next day">
             <ChevronRight className="w-4 h-4" />
           </button>
@@ -230,7 +246,7 @@ export const DateFilter: React.FC<{
               <button type="button" onClick={() => setView(shiftYm(view, -1))} className="icon-btn shrink-0 mt-[-2px]" aria-label="Previous month">
                 <ChevronLeft className="w-4 h-4" />
               </button>
-              <div className="flex-1 flex divide-x divide-line">{[0, 1, 2].map((i) => month(shiftYm(view, i)))}</div>
+              <div className="flex-1 flex divide-x divide-line">{(stay ? [0, 1] : [0, 1, 2]).map((i) => month(shiftYm(view, i)))}</div>
               <button type="button" onClick={() => setView(shiftYm(view, 1))} className="icon-btn shrink-0 mt-[-2px]" aria-label="Next month">
                 <ChevronRight className="w-4 h-4" />
               </button>
@@ -265,7 +281,11 @@ export const DateFilter: React.FC<{
                 )}
               </div>
               <span className="text-[11.5px] text-muted">
-                {mode === 'date'
+                {stay && mode === 'range'
+                  ? start
+                    ? en ? `Check-in ${formatLongDate(start)} — now click the check-out day` : `체크인 ${formatLongDate(start)} — 체크아웃 날짜를 선택하세요`
+                    : en ? 'Click the check-in day, then the check-out day' : '체크인 날짜, 체크아웃 날짜를 차례로 선택하세요'
+                  : mode === 'date'
                   ? en ? 'Pick a day' : '날짜를 선택하세요'
                   : start
                   ? en ? `From ${formatLongDate(start)} — now click the last day` : `${formatLongDate(start)}부터 — 마지막 날짜를 선택하세요`

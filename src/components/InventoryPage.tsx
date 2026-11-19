@@ -233,6 +233,7 @@ export const InventoryPage: React.FC<{
                   <td className="whitespace-nowrap">
                     <div className="text-ink">{formatLongDate(p.date)}</div>
                     {p.reference && <div className="text-[11.5px] text-muted">{p.reference}</div>}
+                    {p.id.startsWith('buy-') && <div className="text-[11.5px] text-accent">{p.remarks || (en ? 'With a booking' : '예약과 함께')}</div>}
                   </td>
                   <td className="text-[12.5px] text-ink-2">
                     {lines.map((i) => (

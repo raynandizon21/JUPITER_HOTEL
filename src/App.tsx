@@ -355,6 +355,8 @@ export default function App() {
             setReservations={setReservations}
             voucherSales={voucherSales}
             setVoucherSales={setVoucherSales}
+            purchases={purchases}
+            setPurchases={setPurchases}
             casinoRates={casinoRates}
             selectedMonth={selectedMonth}
             setSelectedMonth={setSelectedMonth}
@@ -481,6 +483,8 @@ export default function App() {
           formOnly
           autoOpenNew
           agents={agents}
+          purchases={purchases}
+          setPurchases={setPurchases}
           holidays={activeHolidays}
           reservations={reservations}
           setReservations={setReservations}

@@ -593,7 +593,9 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                       <th className="r !bg-bad-soft !text-bad">{en ? 'Unpaid' : '미결제'}</th>
                       <th className="r !bg-violet-soft !text-violet">{en ? 'Hotel rate' : '호텔 요금'}</th>
                       <th className="r !bg-accent-soft !text-accent">{en ? 'Junket rate' : '정킷 요금'}</th>
-                      <th className="w-10 !bg-sunken" />
+                      <th className="w-10 c !bg-accent-soft !text-accent" title={en ? 'Billing' : '청구서'}>
+                        <Receipt className="w-3.5 h-3.5 inline" />
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -639,7 +641,9 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                       <th className="r !bg-warn-soft !text-warn">{en ? 'Unit price' : '단가'}</th>
                       <th className="r !bg-violet-soft !text-violet">{en ? 'Hotel cost' : '호텔 원가'}</th>
                       <th className="r !bg-accent-soft !text-accent">{en ? 'Amount' : '금액'}</th>
-                      <th className="w-10 !bg-sunken" />
+                      <th className="w-10 c !bg-accent-soft !text-accent" title={en ? 'Billing' : '청구서'}>
+                        <Receipt className="w-3.5 h-3.5 inline" />
+                      </th>
                     </tr>
                   </thead>
                   <tbody>

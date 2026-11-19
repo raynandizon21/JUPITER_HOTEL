@@ -26,11 +26,13 @@ export const InventoryPage: React.FC<{
   const stock = useMemo(() => buildStock(purchases, reservations, voucherSales, casinoRates, en), [purchases, reservations, voucherSales, casinoRates, en]);
   // rows worth showing: everything bought or used, plus every room type / voucher so staff see what can be bought
   // revenue / cost / markup only for stock that was actually bought (no cost known otherwise)
-  // Hilton side only: what was bought, and what is still available (rooms in room-nights)
+  // Hilton side only: what was bought, and what is still available (rooms in room-nights).
+  // Available never shows below 0 and is never red: used more than bought shows 0 (amber), and the
+  // "N used up" badge says so.
   const totals = {
     cost: stock.reduce((a, r) => a + r.cost, 0),
-    roomsLeft: stock.filter((r) => r.kind === 'room').reduce((a, r) => a + r.left, 0),
-    vouchersLeft: stock.filter((r) => r.kind === 'voucher').reduce((a, r) => a + r.left, 0),
+    roomsLeft: stock.filter((r) => r.kind === 'room').reduce((a, r) => a + Math.max(r.left, 0), 0),
+    vouchersLeft: stock.filter((r) => r.kind === 'voucher').reduce((a, r) => a + Math.max(r.left, 0), 0),
   };
   // Rooms / Vouchers tab — the stock table and the purchases list both follow it
   const [tab, setTab] = useState<'room' | 'voucher'>('room');
@@ -92,14 +94,14 @@ export const InventoryPage: React.FC<{
         <Card Icon={Receipt} tone="info" label={en ? 'Hotel Bill' : '호텔 청구액'} value={peso(totals.cost)} hint={en ? `${purchases.length} purchases · wholesale` : `구매 ${purchases.length}건 · 도매가`} />
         <Card
           Icon={BedDouble}
-          tone={totals.roomsLeft < 0 ? 'bad' : 'ok'}
+          tone="ok"
           label={en ? 'Room-nights available' : '가용 객실 (박)'}
           value={totals.roomsLeft.toLocaleString('en-US')}
           hint={en ? 'All room types' : '전체 객실 타입'}
         />
         <Card
           Icon={Ticket}
-          tone={totals.vouchersLeft < 0 ? 'bad' : 'warn'}
+          tone="warn"
           label={en ? 'Vouchers available' : '가용 바우처'}
           value={totals.vouchersLeft.toLocaleString('en-US')}
           hint={en ? 'Breakfast, dinner, extra bed' : '조식·석식·엑스트라 베드'}
@@ -175,10 +177,10 @@ export const InventoryPage: React.FC<{
                     {r.bought || r.used ? (
                       <span
                         className={`num inline-grid place-items-center min-w-7 h-5 px-1.5 rounded-full text-[12px] font-semibold ${
-                          r.left < 0 ? 'bg-bad-soft text-bad' : r.left === 0 ? 'bg-warn-soft text-warn' : 'bg-ok-soft text-ok'
+                          r.left <= 0 ? 'bg-warn-soft text-warn' : 'bg-ok-soft text-ok'
                         }`}
                       >
-                        {r.left}
+                        {Math.max(r.left, 0)}
                       </span>
                     ) : (
                       <Dim />

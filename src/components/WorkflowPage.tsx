@@ -210,7 +210,7 @@ export const WorkflowPage: React.FC<{
             text: short.length
               ? short
                   .slice(0, 2)
-                  .map((r) => `${r.label} ${r.left}`)
+                  .map((r) => `${r.label} ${Math.max(r.left, 0)}`)
                   .join(' · ') + (short.length > 2 ? ' …' : '')
               : purchases.length
               ? en ? 'Everything still available' : '모두 가용'

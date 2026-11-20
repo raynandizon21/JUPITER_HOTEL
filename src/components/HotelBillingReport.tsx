@@ -1,86 +1,38 @@
 import React, { useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, FileDown, FileSpreadsheet, FileText } from 'lucide-react';
-import { CasinoRatesConfig, Reservation, VoucherSale } from '../types/hotel';
-import { formatLongDate, formatMonth, getDayCategory, getDaysInMonth, getNightlyRates } from '../utils/hotelHelpers';
+import { CasinoRatesConfig, HotelPurchase } from '../types/hotel';
+import { formatLongDate, formatMonth, getDayCategory, getDaysInMonth } from '../utils/hotelHelpers';
 import { peso, todayISO } from '../utils/billing';
-import { chargeStockItem, roomIdOf, VoucherItem } from '../utils/inventory';
+import { itemLabel } from '../utils/inventory';
 import { Language } from '../i18n/translations';
 import { Dialog, MonthSelect, MONTHS, PageHeader, toast } from './ui';
 
-/** One room type on one day: rooms and amount at the Single/Double and Triple Sharing rates. */
-type RoomCell = { sd: number; sdAmt: number; tr: number; trAmt: number };
-type DayBill = {
-  date: string;
-  holiday: boolean;
-  rooms: Map<string, RoomCell>;
-  buffet: Record<VoucherItem, { qty: number; amt: number }>;
-  roomN: number;
-  pax: number;
-  total: number;
-};
+/** One bought line on one day: item × unit cost (same item + same cost on the same day are added up). */
+type BillLine = { kind: 'room' | 'voucher'; item: string; unitCost: number; qty: number; amt: number };
+type DayBill = { date: string; lines: BillLine[]; roomN: number; pax: number; total: number };
 
 /**
- * The hotel's Monthly Billing Report, rebuilt from the app's bookings:
- *  - rooms: each night in the room, at the rate card (junket) rate of that day — weekday, or weekend for
- *    Fri / Sat and holiday nights; Single/Double and Triple Sharing apart;
- *  - buffet: vouchers (breakfast / dinner / extra bed) of bookings on their charge date + vouchers-only sales
- *    on their date, at the rate card price (applicable rate × pax).
+ * The hotel's bill to Jupiter, day by day = the Hotel Purchases dated that day (wholesale unit cost × qty),
+ * so the month adds up to the Hotel Bill on the Dashboard.
  */
-function buildBill(month: string, reservations: Reservation[], voucherSales: VoucherSale[], rates: CasinoRatesConfig): DayBill[] {
-  const days = new Map<string, DayBill>(
-    getDaysInMonth(month).map((date) => [
-      date,
-      {
-        date,
-        holiday: false,
-        rooms: new Map(),
-        buffet: { breakfast: { qty: 0, amt: 0 }, dinner: { qty: 0, amt: 0 }, extraBed: { qty: 0, amt: 0 } },
-        roomN: 0,
-        pax: 0,
-        total: 0,
-      },
-    ])
-  );
-  const addVoucher = (date: string, v: VoucherItem, qty: number) => {
-    const d = days.get(date);
-    if (!d) return;
-    const amt = qty * (rates.vouchers[v] || 0);
-    d.buffet[v].qty += qty;
-    d.buffet[v].amt += amt;
-    d.pax += qty;
-    d.total += amt;
-  };
-  for (const r of reservations) {
-    const id = roomIdOf(r, rates);
-    if (id) {
-      const occ = r.occupancy || 'singleDouble';
-      for (const n of getNightlyRates(r.checkIn, r.checkOut, id, occ, rates, r.holidayDates || [])) {
-        const d = days.get(n.date);
-        if (!d) continue;
-        const cell = d.rooms.get(id) ?? { sd: 0, sdAmt: 0, tr: 0, trAmt: 0 };
-        if (occ === 'triple') {
-          cell.tr += 1;
-          cell.trAmt += n.listRate;
-        } else {
-          cell.sd += 1;
-          cell.sdAmt += n.listRate;
-        }
-        d.rooms.set(id, cell);
-        if (n.kind === 'holiday') d.holiday = true;
-        d.roomN += 1;
-        d.total += n.listRate;
-      }
-    }
-    for (const c of r.charges || []) {
-      const v = chargeStockItem(c);
-      if (v) addVoucher(c.date, v, c.qty);
+function buildBill(month: string, purchases: HotelPurchase[]): DayBill[] {
+  const days = new Map<string, DayBill>(getDaysInMonth(month).map((date) => [date, { date, lines: [], roomN: 0, pax: 0, total: 0 }]));
+  for (const p of purchases) {
+    const d = days.get(p.date);
+    if (!d) continue;
+    for (const i of p.items) {
+      if (!(i.qty > 0)) continue;
+      const amt = i.qty * i.unitCost;
+      const same = d.lines.find((l) => l.kind === i.kind && l.item === i.item && l.unitCost === i.unitCost);
+      if (same) {
+        same.qty += i.qty;
+        same.amt += amt;
+      } else d.lines.push({ kind: i.kind, item: i.item, unitCost: i.unitCost, qty: i.qty, amt });
+      if (i.kind === 'room') d.roomN += i.qty;
+      else d.pax += i.qty;
+      d.total += amt;
     }
   }
-  for (const s of voucherSales)
-    for (const c of s.items) {
-      const v = chargeStockItem(c);
-      if (v) addVoucher(c.date || s.date, v, c.qty);
-    }
   return [...days.values()];
 }
 
@@ -88,23 +40,21 @@ const weekday = (date: string, en: boolean) =>
   new Date(date + 'T00:00:00Z').toLocaleDateString(en ? 'en-US' : 'ko-KR', { weekday: 'long', timeZone: 'UTC' });
 
 export const HotelBillingReport: React.FC<{
-  reservations: Reservation[];
-  voucherSales: VoucherSale[];
+  purchases: HotelPurchase[];
   casinoRates: CasinoRatesConfig;
   selectedMonth: string;
   setSelectedMonth: (m: string) => void;
   language: Language;
-}> = ({ reservations, voucherSales, casinoRates, selectedMonth, setSelectedMonth, language }) => {
+}> = ({ purchases, casinoRates, selectedMonth, setSelectedMonth, language }) => {
   const en = language === 'en';
   const month = selectedMonth;
   const months = useMemo(() => {
     const s = new Set(MONTHS);
-    reservations.forEach((r) => s.add(r.checkIn.slice(0, 7)));
-    voucherSales.forEach((v) => s.add(v.date.slice(0, 7)));
+    purchases.forEach((p) => s.add(p.date.slice(0, 7)));
     s.add(month);
     return [...s].sort();
-  }, [reservations, voucherSales, month]);
-  const bill = useMonthBill(month, reservations, voucherSales, casinoRates);
+  }, [purchases, month]);
+  const bill = useMonthBill(month, purchases);
   const roomNights = bill.reduce((a, d) => a + d.roomN, 0);
   const pax = bill.reduce((a, d) => a + d.pax, 0);
   const last = bill[bill.length - 1]?.date;
@@ -115,8 +65,8 @@ export const HotelBillingReport: React.FC<{
         title={en ? 'Hotel Billing Report' : '호텔 청구 보고서'}
         lede={
           en
-            ? 'Day by day, like the hotel’s Monthly Billing Report (junket rates). Click a day for its breakdown.'
-            : '호텔 월간 청구 보고서와 같은 일별 내역 (정킷 요금). 날짜를 누르면 상세 내역이 보입니다.'
+            ? 'Hotel Purchases day by day (what Jupiter bought from the hotel, wholesale). Click a day for its breakdown.'
+            : '호텔 구매 일별 내역 (도매가). 날짜를 누르면 상세 내역이 보입니다.'
         }
         actions={
           <>
@@ -143,7 +93,7 @@ export const HotelBillingReport: React.FC<{
             {en ? 'Booking date' : '예약 기간'}: <span className="text-ink-2">{last ? `${formatMonth(month).split(' ')[0]} 1 - ${Number(last.slice(8))}, ${month.slice(0, 4)}` : '—'}</span>
           </span>
           <span className="text-muted ml-auto">
-            {en ? 'Room nights' : '객실 박수'} <b className="num text-ink">{roomNights}</b> · {en ? 'Pax (buffet)' : '뷔페 인원'} <b className="num text-ink">{pax}</b>
+            {en ? 'Room-nights bought' : '구매 객실 박수'} <b className="num text-ink">{roomNights}</b> · {en ? 'Vouchers bought' : '구매 바우처'} <b className="num text-ink">{pax}</b>
           </span>
         </div>
         <DailyBillList month={month} bill={bill} rates={casinoRates} en={en} />
@@ -152,12 +102,11 @@ export const HotelBillingReport: React.FC<{
   );
 };
 
-/** The hotel's bill for a month, built from the bookings (memoised). */
-export const useMonthBill = (month: string, reservations: Reservation[], voucherSales: VoucherSale[], rates: CasinoRatesConfig) =>
-  useMemo(() => buildBill(month, reservations, voucherSales, rates), [month, reservations, voucherSales, rates]);
+/** The hotel's bill for a month, from Hotel Purchases (memoised). */
+export const useMonthBill = (month: string, purchases: HotelPurchase[]) => useMemo(() => buildBill(month, purchases), [month, purchases]);
 
 /**
- * Every day of the month (two halves side by side, so it fits) with rooms / pax / junket-rate total and the
+ * Every day of the month (two halves side by side, so it fits) with rooms / vouchers / amount bought and the
  * month total bar; clicking a day opens its breakdown in the hotel's sheet format.
  * Used by the Hotel Billing Report page and the Dashboard's Hotel Bill pop-up (Every day tab).
  */
@@ -173,24 +122,23 @@ export const DailyBillList: React.FC<{ month: string; bill: DayBill[]; rates: Ca
         <tr>
           <th>{en ? 'Date' : '날짜'}</th>
           <th className="c">{en ? 'Rooms' : '객실'}</th>
-          <th className="c">{en ? 'Pax' : '인원'}</th>
-          <th className="r">{en ? 'Junket rate' : '정킷 요금'}</th>
+          <th className="c">{en ? 'Vouchers' : '바우처'}</th>
+          <th className="r">{en ? 'Amount' : '금액'}</th>
         </tr>
       </thead>
       <tbody>
         {rows.map((d) => {
-          const has = d.total > 0 || d.roomN > 0 || d.pax > 0;
+          const has = d.lines.length > 0;
           const wk = getDayCategory(d.date) === 'weekend';
           return (
             <tr key={d.date} onClick={() => setOpen(d.date)} className="cursor-pointer">
               <td className="whitespace-nowrap">
                 <span className={`inline-block w-[34px] text-[11.5px] ${wk ? 'text-warn font-semibold' : 'text-muted'}`}>{weekday(d.date, en).slice(0, 3)}</span>
                 <span className={has ? 'text-ink' : 'text-muted'}>{formatLongDate(d.date)}</span>
-                {d.holiday && <span className="badge badge-bad ml-2">{en ? 'Holiday' : '공휴일'}</span>}
               </td>
               <td className="c num">{d.roomN ? d.roomN : <span className="text-faint">-</span>}</td>
               <td className="c num">{d.pax ? d.pax : <span className="text-faint">-</span>}</td>
-              <td className="r num">{d.total ? <b className="text-ink">{peso(d.total)}</b> : <span className="text-faint">-</span>}</td>
+              <td className="r num">{d.total ? <b className="text-ink">{peso(d.total)}</b> : has ? <span className="text-ok">{en ? 'Free' : '무료'}</span> : <span className="text-faint">-</span>}</td>
             </tr>
           );
         })}
@@ -227,40 +175,19 @@ const money = (v: number) => v.toLocaleString('en-US', { minimumFractionDigits: 
 type SheetRow = { name: string; rate: number; qty: number; amt: number };
 type Section = { title: string; rateHead: string; qtyHead: string; rows: SheetRow[] };
 
-/** A day's sheet sections (hotel format), only what was used: room types / buffet items with rooms or pax. */
+/** A day's sheet sections (hotel format): rooms and vouchers bought that day, unit cost × qty = sub-total. */
 function daySections(day: DayBill, rates: CasinoRatesConfig, en: boolean): Section[] {
-  const weekend = getDayCategory(day.date) === 'weekend' || day.holiday;
+  const order = (l: BillLine) => (l.kind === 'room' ? rates.rooms.findIndex((r) => r.id === l.item) : ['breakfast', 'dinner', 'extraBed'].indexOf(l.item));
+  const rowsOf = (kind: 'room' | 'voucher') =>
+    day.lines
+      .filter((l) => l.kind === kind)
+      .sort((x, y) => order(x) - order(y) || y.unitCost - x.unitCost)
+      .map((l) => ({ name: itemLabel(l, rates, en), rate: l.unitCost, qty: l.qty, amt: l.amt }));
   const sections: Section[] = [
-    {
-      title: en ? 'Room Category' : '객실 종류',
-      rateHead: day.holiday ? (en ? 'Weekend Rate (Holiday)' : '주말 요금 (공휴일)') : weekend ? (en ? 'Weekend Rate' : '주말 요금') : en ? 'Weekday Rate' : '평일 요금',
-      qtyHead: en ? 'No. of Rooms' : '객실 수',
-      rows: rates.rooms.map((rm) => {
-        const c = day.rooms.get(rm.id);
-        return { name: rm.name, rate: weekend ? rm.singleDoubleWeekend : rm.singleDoubleWeekday, qty: c?.sd || 0, amt: c?.sdAmt || 0 };
-      }),
-    },
-    {
-      title: en ? 'Room Category' : '객실 종류',
-      rateHead: en ? 'Triple Sharing' : '트리플',
-      qtyHead: en ? 'No. of Rooms' : '객실 수',
-      rows: rates.rooms.map((rm) => {
-        const c = day.rooms.get(rm.id);
-        return { name: rm.name, rate: weekend ? rm.tripleWeekend : rm.tripleWeekday, qty: c?.tr || 0, amt: c?.trAmt || 0 };
-      }),
-    },
-    {
-      title: en ? 'Buffet Category' : '뷔페 종류',
-      rateHead: en ? 'Applicable Rate' : '적용 요금',
-      qtyHead: en ? 'No. of Pax' : '인원',
-      rows: [
-        { name: en ? 'Buffet Breakfast' : '조식 뷔페', rate: rates.vouchers.breakfast, qty: day.buffet.breakfast.qty, amt: day.buffet.breakfast.amt },
-        { name: en ? 'Buffet Dinner' : '석식 뷔페', rate: rates.vouchers.dinner, qty: day.buffet.dinner.qty, amt: day.buffet.dinner.amt },
-        { name: en ? 'Extra Bed' : '엑스트라 베드', rate: rates.vouchers.extraBed, qty: day.buffet.extraBed.qty, amt: day.buffet.extraBed.amt },
-      ],
-    },
+    { title: en ? 'Room Category' : '객실 종류', rateHead: en ? 'Unit Cost' : '단가', qtyHead: en ? 'No. of Rooms' : '객실 수', rows: rowsOf('room') },
+    { title: en ? 'Voucher Category' : '바우처 종류', rateHead: en ? 'Unit Cost' : '단가', qtyHead: en ? 'No. of Pax' : '수량', rows: rowsOf('voucher') },
   ];
-  return sections.map((sec) => ({ ...sec, rows: sec.rows.filter((r) => r.qty > 0) })).filter((sec) => sec.rows.length > 0);
+  return sections.filter((sec) => sec.rows.length > 0);
 }
 
 const dayTitle = (date: string, en: boolean) => `${weekday(date, en)}, ${formatLongDate(date)}`;
@@ -354,7 +281,7 @@ async function pdfMonth(month: string, bill: DayBill[], rates: CasinoRatesConfig
     .map((d) => `<tr><td class="r">${esc(dayTitle(d.date, true))}</td><td><div class="peso"><span>₱</span><span>${d.total ? money(d.total) : '-'}</span></div></td></tr>`)
     .join('');
   const summary = `${headerHtml(month, last, en, en ? 'Monthly Billing Report' : '월간 청구 보고서')}
-  <table class="sheet" style="margin-top:14px"><tr class="h"><td style="text-align:center">${en ? 'Date' : '날짜'}</td><td>${en ? 'Junket Rate' : '정킷 요금'}</td></tr>${list}
+  <table class="sheet" style="margin-top:14px"><tr class="h"><td style="text-align:center">${en ? 'Date' : '날짜'}</td><td>${en ? 'Amount' : '금액'}</td></tr>${list}
   <tr class="bar"><td>${en ? `Total bill for ${monthName(month)}` : `${formatMonth(month)} 총 청구액`}</td><td><div class="peso"><span>₱</span><span>${money(total)}</span></div></td></tr></table>
   <div class="sign"><div>${en ? 'Payment made by' : '지급자'}</div><div>${en ? 'Payment received by' : '수령자'}</div></div>`;
   const days = bill.map((d) => dayHtml(d, rates, en)).filter(Boolean);
@@ -363,7 +290,7 @@ async function pdfMonth(month: string, bill: DayBill[], rates: CasinoRatesConfig
 
 async function pdfDay(day: DayBill, rates: CasinoRatesConfig, en: boolean) {
   const head = `<h1>${en ? 'Daily Billing' : '일일 청구'}</h1><div class="muted">${en ? 'Bill To: Jupiter' : '청구 대상: 주피터'}</div>`;
-  await savePdf(`Hotel_Billing_${day.date}.pdf`, [head, dayHtml(day, rates, en) || `<p class="muted">${en ? 'No rooms or buffet on this day.' : '내역 없음'}</p>`]);
+  await savePdf(`Hotel_Billing_${day.date}.pdf`, [head, dayHtml(day, rates, en) || `<p class="muted">${en ? 'Nothing bought from the hotel on this day.' : '구매 없음'}</p>`]);
 }
 
 // ---------- Excel
@@ -383,7 +310,7 @@ function writeDay(ws: import('exceljs').Worksheet, row: number, day: DayBill, ra
   ws.getCell(row, 1).font = { bold: true, size: 12 };
   row++;
   if (!secs.length) {
-    ws.getCell(row, 1).value = en ? 'No rooms or buffet on this day.' : '내역 없음';
+    ws.getCell(row, 1).value = en ? 'Nothing bought from the hotel on this day.' : '구매 없음';
     return row + 2;
   }
   const start = row;
@@ -436,7 +363,7 @@ async function excelMonth(month: string, bill: DayBill[], rates: CasinoRatesConf
   ws.addRow([`${en ? 'Bill To: Jupiter' : '청구 대상: 주피터'}`, `${en ? 'Date' : '작성일'}: ${formatLongDate(todayISO())}`]);
   ws.addRow([`${en ? 'Booking Date' : '예약 기간'}: ${monthName(month)} 1 - ${Number(last.slice(8))}, ${month.slice(0, 4)}`]);
   ws.addRow([]);
-  const h = ws.addRow([en ? 'Date' : '날짜', en ? 'Junket Rate' : '정킷 요금']);
+  const h = ws.addRow([en ? 'Date' : '날짜', en ? 'Amount' : '금액']);
   h.eachCell((c) => {
     c.fill = HEAD_FILL;
     c.font = { bold: true, color: { argb: 'FFE9C46A' } };
@@ -460,7 +387,7 @@ async function excelMonth(month: string, bill: DayBill[], rates: CasinoRatesConf
   const ds = wb.addWorksheet(en ? 'Daily breakdown' : '일별 내역');
   ds.columns = [{ width: 34 }, { width: 22 }, { width: 14 }, { width: 18 }, { width: 18 }];
   let row = 1;
-  for (const d of bill) if (d.total || d.roomN || d.pax) row = writeDay(ds, row, d, rates, en);
+  for (const d of bill) if (d.lines.length) row = writeDay(ds, row, d, rates, en);
   await download(wb, `Hotel_Billing_Report_${month}.xlsx`);
 }
 
@@ -509,11 +436,11 @@ const DayBreakdown: React.FC<{
           </Nav>
         </span>
       }
-      subtitle={en ? 'Bill to: Jupiter · rates from Room Rates' : '청구 대상: 주피터 · 객실 요금표 기준'}
+      subtitle={en ? 'Bill to: Jupiter · from Hotel Purchases (wholesale)' : '청구 대상: 주피터 · 호텔 구매 기준'}
     >
       <div className="px-6 py-3">
         {shown.length === 0 ? (
-          <div className="py-10 text-center text-[13px] text-muted">{en ? 'No rooms or buffet on this day.' : '이 날은 객실·뷔페 내역이 없습니다.'}</div>
+          <div className="py-10 text-center text-[13px] text-muted">{en ? 'Nothing bought from the hotel on this day.' : '이 날 호텔 구매가 없습니다.'}</div>
         ) : (
         <table className="w-full border-collapse bg-surface text-ink">
           <colgroup>

@@ -78,7 +78,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
   const monthPurchases = useMemo(() => purchases.filter((p) => p.date.slice(0, 7) === month), [purchases, month]);
   // Hotel Bill pop-up: purchases list, or every day like the hotel's Monthly Billing Report
   const [billTab, setBillTab] = useState<'purchases' | 'daily'>('daily');
-  const monthBill = useMonthBill(month, reservations, voucherSales, casinoRates);
+  const monthBill = useMonthBill(month, purchases);
   // Guest money this month — the SAME rule as the Daily Settlement table, so every number tallies:
   // a booking counts only its nights (and extras) that fall in this month, its payments covering the
   // earliest days first; vouchers-only sales count by their sale date.
@@ -735,7 +735,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
           subtitle={
             billTab === 'purchases'
               ? en ? 'Rooms and vouchers bought from the hotel this month' : '이 달 호텔에서 구매한 객실·바우처'
-              : en ? 'Every day, like the hotel’s Monthly Billing Report (junket rates) — click a day for its breakdown' : '호텔 월간 청구 보고서와 같은 일별 내역 — 날짜를 누르면 상세'
+              : en ? 'Hotel Purchases day by day — click a day for its breakdown' : '호텔 구매 일별 내역 — 날짜를 누르면 상세'
           }
         >
           <div className="px-6 pt-4">

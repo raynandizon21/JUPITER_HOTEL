@@ -428,8 +428,7 @@ export default function App() {
       case 'hotelBill':
         return (
           <HotelBillingReport
-            reservations={reservations}
-            voucherSales={voucherSales}
+            purchases={purchases}
             casinoRates={casinoRates}
             selectedMonth={selectedMonth}
             setSelectedMonth={setSelectedMonth}

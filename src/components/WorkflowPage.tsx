@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AlertTriangle, BookOpenText, Building2, CheckCircle2, Lightbulb, Maximize2, ShoppingCart, SlidersHorizontal, Users, Wallet } from 'lucide-react';
+import { AlertTriangle, BookOpenText, Building2, CheckCircle2, Lightbulb, Maximize2, SlidersHorizontal, Users, Wallet } from 'lucide-react';
 import { ActiveModule, CasinoRatesConfig, HotelPurchase, Reservation, Settlement, VoucherSale } from '../types/hotel';
 import { folioOf, peso, settlementOf, todayISO, voucherTotals } from '../utils/billing';
 import { formatMonth } from '../utils/hotelHelpers';
@@ -26,10 +26,14 @@ type Step = {
   tip: string;
   to: ActiveModule;
   page: string;
+  /** one process, two sides of the same form (Hotel | Guest), shown side by side — the card is 2 columns wide */
+  sides?: { label: string; sub: string; tone: string; do: [string, string][] }[];
+  /** actions after the sides */
+  then?: [string, string][];
 };
 
 /**
- * System Workflow (sidebar → Guide): Hilton ↔ Jupiter ↔ Guest at a glance and the 5 steps staff
+ * System Workflow (sidebar → Guide): Hilton ↔ Jupiter ↔ Guest at a glance and the 4 steps staff
  * follow, each in two actions. A step's page button opens that page itself in a pop-up
  * (no leaving this page).
  */
@@ -60,28 +64,32 @@ export const WorkflowPage: React.FC<{
       page: en ? 'Room Rates' : '객실 요금',
     },
     {
-      Icon: ShoppingCart,
-      color: 'bg-accent',
-      soft: 'bg-accent-soft text-accent hover:bg-accent hover:text-white',
-      title: en ? 'Buy from Hilton' : '힐튼에서 구매',
-      do: en
-        ? [['New Purchase', 'pick Rooms or Vouchers'], ['Choose item + qty', 'rooms are counted in nights'], ['Enter price → Save', 'or tick Free if Hilton gave it']]
-        : [['새 구매', '객실 또는 바우처 선택'], ['항목 + 수량', '객실은 박 단위'], ['가격 입력 → 저장', '무료면 무료 체크']],
-      result: en ? "Available goes up · added to that month's Hilton bill" : '가용 증가 · 그 달 힐튼 청구액에 추가',
-      tip: en ? 'The same room type twice is merged into one line.' : '같은 객실 타입은 한 줄로 합쳐집니다.',
-      to: 'inventory',
-      page: en ? 'Hotel Purchases' : '호텔 구매',
-    },
-    {
       Icon: BookOpenText,
       color: 'bg-warn',
       soft: 'bg-warn-soft text-warn hover:bg-warn hover:text-white',
-      title: en ? 'Book the guest' : '손님 예약',
-      do: en
-        ? [['New Booking', 'agent, guest, room type, dates'], ['Check the nights', 'tick Holiday / Free, add vouchers'], ['Confirm & save', 'Paid in full now or Bill later']]
-        : [['새 예약', '에이전트, 손님, 객실 타입, 날짜'], ['1박 확인', '공휴일/무료 체크, 바우처 추가'], ['확인 및 저장', '지금 결제 또는 나중에 청구']],
-      result: en ? 'Uses 1 available room per night, 1 per voucher' : '1박 = 가용 객실 1개, 바우처 1장 = 1개 사용',
-      tip: en ? 'Yellow warning = not enough bought from Hilton. You can still save.' : '노란 경고 = 힐튼 구매량 부족. 저장은 가능합니다.',
+      title: en ? 'Book the guest + buy from Hilton' : '손님 예약 + 힐튼 구매',
+      do: en ? [['New Booking', 'agent, guest, room type, stay dates']] : [['새 예약', '에이전트, 손님, 객실 타입, 숙박 기간']],
+      sides: [
+        {
+          label: en ? 'Hotel' : '호텔',
+          sub: en ? 'what Jupiter pays Hilton' : '주피터 → 힐튼',
+          tone: 'bg-violet-soft text-violet border-violet-line',
+          do: en
+            ? [['Cost per night', 'last price paid is filled in'], ['Free night from Hilton?', 'tick its Complimentary box → ₱0']]
+            : [['1박 원가', '최근 구매가 자동 입력'], ['힐튼 무료 숙박?', '무료 칸 체크 → ₱0']],
+        },
+        {
+          label: en ? 'Guest' : '손님',
+          sub: en ? 'what the guest pays' : '손님 → 주피터',
+          tone: 'bg-ok-soft text-ok border-ok-line',
+          do: en
+            ? [['Amount', 'rate fills in · holiday = weekend rate'], ['Add vouchers', 'breakfast, dinner, extra bed · free ones too']]
+            : [['금액', '요금 자동 · 공휴일 = 주말 요금'], ['바우처 추가', '조식, 석식, 엑스트라 베드 · 무료 포함']],
+        },
+      ],
+      then: en ? [['Guest payment → Save', 'Paid in full now or Bill later']] : [['손님 결제 → 저장', '지금 결제 또는 나중에 청구']],
+      result: en ? "One Save = guest bill + Hilton purchase (that month's Hilton bill) · margin shown" : '한 번 저장 = 손님 청구 + 힐튼 구매 (그 달 힐튼 청구액) · 마진 표시',
+      tip: en ? 'Bulk buy with no guest yet? Hotel Purchases → New Purchase. Yellow warning = not enough bought; you can still save.' : '손님 없이 대량 구매는 호텔 구매 → 새 구매. 노란 경고 = 구매량 부족, 저장 가능.',
       to: 'ledger',
       page: en ? 'Guest Ledger' : '예약 관리부',
     },
@@ -104,8 +112,8 @@ export const WorkflowPage: React.FC<{
       soft: 'bg-violet-soft text-violet hover:bg-violet hover:text-white',
       title: en ? 'Close the month' : '월 마감',
       do: en
-        ? [['Check every day', 'Daily Settlement + count the cash'], ['Pick the month', 'on the Dashboard'], ['Pay the balance', 'then Print statement / Excel']]
-        : [['매일 확인', '일일 정산 + 현금 대조'], ['월 선택', '대시보드에서'], ['잔액 지급', '정산서 인쇄 / 엑셀']],
+        ? [['Check every day', 'Daily Settlement: Hotel / Junket rate vs Hilton report'], ['Pick the month', 'on the Dashboard'], ['Pay the balance', 'then Print statement / Excel']]
+        : [['매일 확인', '일일 정산: 호텔/정킷 요금 vs 힐튼 보고서'], ['월 선택', '대시보드에서'], ['잔액 지급', '정산서 인쇄 / 엑셀']],
       result: en ? 'Balance due ₱0 → Settled' : '잔액 ₱0 → 정산 완료',
       tip: en ? 'The Hilton bill is the purchases dated that month.' : '힐튼 청구액 = 그 달 구매일의 구매액.',
       to: 'dashboard',
@@ -140,10 +148,10 @@ export const WorkflowPage: React.FC<{
         </div>
       </div>
 
-      {/* ---------------- 5 steps, 2 actions each ---------------- */}
+      {/* ---------------- 4 steps (booking + Hilton purchase = 1 step, 2 columns wide) ---------------- */}
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3 mb-4">
         {steps.map((s, i) => (
-          <div key={s.title} className="card relative overflow-hidden p-4 flex flex-col">
+          <div key={s.title} className={`card relative overflow-hidden p-4 flex flex-col ${s.sides ? 'sm:col-span-2' : ''}`}>
             {/* big step number in the corner */}
             <span className="absolute -right-1 -top-4 num text-[84px] font-bold text-ink/[0.04] select-none pointer-events-none">{i + 1}</span>
             <div className="flex items-center gap-3">
@@ -158,17 +166,56 @@ export const WorkflowPage: React.FC<{
               </div>
             </div>
 
-            <ol className="mt-4 space-y-2 flex-1">
-              {s.do.map(([action, detail], n) => (
-                <li key={action} className="flex items-start gap-2.5">
-                  <span className={`w-5 h-5 rounded-full text-[10.5px] font-bold grid place-items-center shrink-0 mt-px ${tint(s)}`}>{n + 1}</span>
+            {(() => {
+              const Item = ({ n, action, detail, dot }: { n: number; action: string; detail: string; dot: string }) => (
+                <li className="flex items-start gap-2.5">
+                  <span className={`w-5 h-5 rounded-full text-[10.5px] font-bold grid place-items-center shrink-0 mt-px ${dot}`}>{n}</span>
                   <div className="leading-tight min-w-0">
                     <div className="text-[13px] font-semibold text-ink">{action}</div>
                     <div className="text-[11.5px] text-muted mt-0.5">{detail}</div>
                   </div>
                 </li>
-              ))}
-            </ol>
+              );
+              const after = s.do.length + (s.sides ? 1 : 0);
+              return (
+                <div className="mt-4 space-y-2 flex-1">
+                  <ol className="space-y-2">
+                    {s.do.map(([action, detail], n) => (
+                      <Item key={action} n={n + 1} action={action} detail={detail} dot={tint(s)} />
+                    ))}
+                  </ol>
+                  {s.sides && (
+                    <div className="grid grid-cols-2 gap-2">
+                      {s.sides.map((side) => (
+                        <div key={side.label} className={`rounded-lg border ${side.tone.split(' ').filter((c) => c.startsWith('border')).join(' ')} overflow-hidden`}>
+                          <div className={`px-3 py-1.5 flex items-baseline gap-2 ${side.tone}`}>
+                            <span className="text-[11px] font-bold uppercase tracking-wider">
+                              {s.do.length + 1} · {side.label}
+                            </span>
+                            <span className="text-[11px] opacity-75 truncate">{side.sub}</span>
+                          </div>
+                          <ul className="p-2.5 space-y-2">
+                            {side.do.map(([action, detail]) => (
+                              <li key={action} className="leading-tight">
+                                <div className="text-[13px] font-semibold text-ink">{action}</div>
+                                <div className="text-[11.5px] text-muted mt-0.5">{detail}</div>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {s.then && (
+                    <ol className="space-y-2">
+                      {s.then.map(([action, detail], n) => (
+                        <Item key={action} n={after + n + 1} action={action} detail={detail} dot={tint(s)} />
+                      ))}
+                    </ol>
+                  )}
+                </div>
+              );
+            })()}
 
             <div className="mt-4 flex items-start gap-2 rounded-lg bg-ok-soft px-3 py-2 text-[12px] text-ok font-medium">
               <CheckCircle2 className="w-4 h-4 shrink-0 mt-px" />

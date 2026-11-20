@@ -11,7 +11,7 @@ import { StockWarning } from './StockContext';
 import { HolidaysMaintenance } from './HolidaysMaintenance';
 import { DateFilter } from './DateFilter';
 import { NightRateText, ChargeAmountText } from './StayBreakdown';
-import { HotelCostInput, BuyLine, linkedPurchaseId, HG, lastCostOf } from './HotelCostSection';
+import { HotelCostInput, BuyLine, linkedPurchaseId, HG } from './HotelCostSection';
 import { chargeStockItem, itemLabel, stockKey } from '../utils/inventory';
 
 interface GuestReservationLedgerProps {
@@ -110,6 +110,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
   // Form State
   const [formGuestName, setFormGuestName] = useState('');
   const [formConfirmNo, setFormConfirmNo] = useState('');
+  const [formRoomNo, setFormRoomNo] = useState('');
   const [formAgent, setFormAgent] = useState('');
   const [formOic, setFormOic] = useState('');
   const [formRoomType, setFormRoomType] = useState('GUEST ROOM');
@@ -190,6 +191,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
     setFormVouchers([]);
     setFormOic('');
     setFormConfirmNo('');
+    setFormRoomNo('');
     setFormAgent('');
     setFormKind('room');
     setNoLink(false);
@@ -229,6 +231,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
     setFormComps(res.compDates || []);
     setFormOic(res.oic || '');
     setFormConfirmNo(res.confirmationNo || '');
+    setFormRoomNo(res.roomNo || '');
     setFormAgent(res.agentName || '');
     // its own hotel purchase (if it was recorded with the booking): load the costs
     const linked = purchases.find((p) => p.id === linkedPurchaseId(res.id));
@@ -262,8 +265,6 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
   const extrasTotal = editingReservation ? (editingReservation.charges || []).reduce((a, c) => a + chargeAmount(c), 0) : addonTotal;
   const guestTotal = formAmount + extrasTotal;
 
-  // last wholesale price paid per item — default unit cost for "Bought from hotel"
-  const lastCost = useMemo(() => lastCostOf(purchases), [purchases]);
   const formRoomId = casinoRates.rooms.find((x) => x.name.toLowerCase() === formRoomType.toLowerCase())?.id ?? null;
   // quantities follow the booking: nights of its room type + its vouchers
   const buyLines = useMemo<BuyLine[]>(() => {
@@ -275,14 +276,14 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
     }
     return [...need].map(([key, qty]) => {
       const [kind, item] = key.split(':') as ['room' | 'voucher', string];
-      // typed cost, else the last price paid (not for an older booking without a hotel purchase)
-      const cost = key in buyCosts ? buyCosts[key] : noLink ? null : lastCost.get(key) ?? null;
+      // typed cost only — no default (empty = not entered yet)
+      const cost = key in buyCosts ? buyCosts[key] : null;
       const compQty = kind === 'room' ? hotelComps.filter((d) => nightly.some((n) => n.date === d)).length : 0;
       // every night complimentary → no price needed
       const entered = (cost !== null && cost !== undefined) || (compQty > 0 && compQty === qty);
       return { key, kind, item, qty, compQty, entered, free: entered && !cost, unitCost: cost ?? 0, label: itemLabel({ kind, item }, casinoRates, en) };
     });
-  }, [formRoomId, formNights, editingReservation, formVouchers, buyCosts, lastCost, noLink, hotelComps, nightly, casinoRates, en]);
+  }, [formRoomId, formNights, editingReservation, formVouchers, buyCosts, hotelComps, nightly, casinoRates, en]);
   const buyCost = buyLines.reduce((a, l) => a + (l.qty - l.compQty) * l.unitCost, 0);
   const toggleHotelComp = (date: string) => setHotelComps((prev) => (prev.includes(date) ? prev.filter((d) => d !== date) : [...prev, date]));
   const useBuy = !!setPurchases;
@@ -301,7 +302,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
           <input
             type="checkbox"
             checked={line.free}
-            onChange={() => setBuyCost(line.key, line.free ? lastCost.get(line.key) ?? null : 0)}
+            onChange={() => setBuyCost(line.key, line.free ? null : 0)}
             title={en ? 'Complimentary from the hotel — ₱0 to Jupiter' : '호텔 무료 제공 — 주피터 ₱0'}
             className="w-4 h-4 accent-[#2e7a57] cursor-pointer align-middle"
           />
@@ -403,6 +404,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                 ...r,
                 guestName: formGuestName,
                 confirmationNo: formConfirmNo.trim(),
+                roomNo: formRoomNo.trim(),
                 agentName: formAgent.trim().replace(/\s+/g, ' '),
                 oic: formOic.trim(),
                 roomType: formRoomType,
@@ -427,6 +429,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
         id: `res-${Date.now()}`,
         guestName: formGuestName,
         confirmationNo: formConfirmNo.trim(),
+        roomNo: formRoomNo.trim(),
         agentName: formAgent.trim().replace(/\s+/g, ' '),
         oic: formOic.trim(),
         roomType: formRoomType,
@@ -513,7 +516,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
         const matchesRoom = r.roomType.toLowerCase().includes(query);
         const matchesDate = r.checkIn.includes(query) || r.checkOut.includes(query);
         const matchesRemarks = r.remarks.toLowerCase().includes(query);
-        const matchesConfirm = (r.confirmationNo || '').toLowerCase().includes(query);
+        const matchesConfirm = (r.confirmationNo || '').toLowerCase().includes(query) || (r.roomNo || '').toLowerCase().includes(query);
         if (!matchesName && !matchesRoom && !matchesDate && !matchesRemarks && !matchesConfirm) {
           return false;
         }
@@ -716,7 +719,10 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                         {flashId === res.id && <span className="badge badge-ok">{en ? 'New' : '신규'}</span>}
                       </div>
                     </td>
-                    <td className="num whitespace-nowrap">{res.confirmationNo ? <span className="text-ink font-medium">{res.confirmationNo}</span> : <span className="text-faint">—</span>}</td>
+                    <td className="num whitespace-nowrap">
+                      {res.confirmationNo ? <span className="block text-ink font-medium">{res.confirmationNo}</span> : !res.roomNo && <span className="text-faint">—</span>}
+                      {res.roomNo && <span className="block text-[11px] text-muted">{en ? 'Room' : '객실'} {res.roomNo}</span>}
+                    </td>
                     <td className="text-ink-2 whitespace-nowrap">{res.roomType}</td>
                     <td className="text-ink-2 whitespace-nowrap">{formatDateRange(res.checkIn, res.checkOut)}</td>
                     <td className="c num">{res.nights}</td>
@@ -880,7 +886,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
 
       {editingVoucher && (
         <Dialog
-          width="max-w-2xl"
+          width="max-w-4xl"
           title={en ? 'Edit voucher purchase' : '바우처 구매 수정'}
           subtitle={editingVoucher.guestName}
           onClose={() => setEditingVoucher(null)}
@@ -1177,8 +1183,9 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
           ) : (
           <form onSubmit={handleSaveReservation}>
             <div className="px-6 py-3 grid grid-cols-2 gap-x-4 gap-y-2.5">
-              <div className="col-span-2">
-                <label className="field-label">{en ? 'Confirmation no. (from hotel)' : '호텔 확인 번호'}</label>
+              {/* Confirmation no. · Room no. on one line */}
+              <div className="min-w-0">
+                <label className="field-label">{en ? 'Confirmation #: (from hotel)' : '호텔 확인 번호'}</label>
                 <input
                   type="text"
                   value={formConfirmNo}
@@ -1194,6 +1201,17 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                       : `이미 사용 중: ${confirmTaken.guestName} (${formatDateRange(confirmTaken.checkIn, confirmTaken.checkOut)})`}
                   </div>
                 )}
+              </div>
+              <div className="min-w-0">
+                <label className="field-label">{en ? 'Room #:' : '객실 번호'}</label>
+                <input
+                  type="text"
+                  value={formRoomNo}
+                  onChange={(e) => setFormRoomNo(e.target.value)}
+                  maxLength={20}
+                  placeholder={en ? 'Optional — e.g. 1203' : '선택 — 예: 1203'}
+                  className="input num"
+                />
               </div>
 
               {/* Agent · Guest Name · Room Type on one line */}

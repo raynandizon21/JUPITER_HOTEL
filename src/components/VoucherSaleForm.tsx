@@ -5,9 +5,9 @@ import { peso, nowStamp, todayISO, uid, voucherTotals, chargeAmount } from '../u
 import { chargeStockItem, itemLabel, stockKey } from '../utils/inventory';
 import { ChargeAmountText, FreeCheck } from './StayBreakdown';
 import { ComboInput, Select, toast } from './ui';
-import { StockWarning } from './StockContext';
+import { StockWarning, useStockLeft } from './StockContext';
 import { DateFilter } from './DateFilter';
-import { BuyLine, HG, HotelCostInput, lastCostOf, linkedPurchaseId } from './HotelCostSection';
+import { BuyLine, HG, HotelCostInput, linkedPurchaseId } from './HotelCostSection';
 
 /**
  * Voucher-only purchase (no room booking): guest, date, voucher items (hotel cost | guest price), paid now / bill later.
@@ -50,8 +50,21 @@ export const VoucherSaleForm: React.FC<{
     Object.fromEntries((linked?.items || []).map((i) => [stockKey(i.kind, i.item), i.unitCost]))
   );
   const [buyTried, setBuyTried] = useState(false);
-  const lastCost = useMemo(() => lastCostOf(purchases), [purchases]);
-  const buyLines = useMemo<BuyLine[]>(() => {
+  // Source per voucher kind: 'buy' = bought from the hotel now (cost typed, saved as `buy-<saleId>`),
+  // 'stock' = taken from vouchers bought earlier (Hotel Purchases) — no new purchase, no cost to type.
+  // Editing: a kind that is not in its own purchase came from stock. New line: stock when enough is left.
+  const stockLeft = useStockLeft(en, initial ? { voucherSaleId: initial.id } : undefined);
+  const [source, setSource] = useState<Record<string, 'buy' | 'stock'>>(() => {
+    if (!initial) return {};
+    const own = new Set((linked?.items || []).map((i) => stockKey(i.kind, i.item)));
+    return Object.fromEntries(
+      initial.items.flatMap((c) => {
+        const v = chargeStockItem(c);
+        return v ? [[stockKey('voucher', v), own.has(stockKey('voucher', v)) ? 'buy' : 'stock']] : [];
+      })
+    );
+  });
+  const buyLines = useMemo<(BuyLine & { stock: boolean; left: number })[]>(() => {
     const need = new Map<string, number>();
     for (const c of items) {
       const v = chargeStockItem(c);
@@ -59,12 +72,27 @@ export const VoucherSaleForm: React.FC<{
     }
     return [...need].map(([key, qty]) => {
       const item = key.split(':')[1];
-      const cost = key in buyCosts ? buyCosts[key] : noLink ? null : lastCost.get(key) ?? null;
-      const entered = cost !== null && cost !== undefined;
-      return { key, kind: 'voucher', item, qty, compQty: 0, entered, free: entered && !cost, unitCost: cost ?? 0, label: itemLabel({ kind: 'voucher', item }, casinoRates, en) };
+      const left = stockLeft.get(key) ?? 0;
+      const stock = (source[key] ?? (left >= qty ? 'stock' : 'buy')) === 'stock';
+      const cost = stock ? 0 : key in buyCosts ? buyCosts[key] : null;
+      const entered = stock || (cost !== null && cost !== undefined);
+      return {
+        key,
+        kind: 'voucher' as const,
+        item,
+        qty,
+        compQty: 0,
+        entered,
+        free: !stock && entered && !cost,
+        unitCost: cost ?? 0,
+        label: itemLabel({ kind: 'voucher', item }, casinoRates, en),
+        stock,
+        left,
+      };
     });
-  }, [items, buyCosts, noLink, lastCost, casinoRates, en]);
+  }, [items, buyCosts, source, stockLeft, casinoRates, en]);
   const buyCost = buyLines.reduce((a, l) => a + l.qty * l.unitCost, 0);
+  const fromStock = buyLines.filter((l) => l.stock).reduce((a, l) => a + l.qty, 0);
   const buySkipped = noLink && buyLines.every((l) => !l.entered);
   const setBuyCost = (key: string, cost: number | null) => setBuyCosts((prev) => ({ ...prev, [key]: cost }));
   const { G, SUB, HH, GH, HC, GC } = HG;
@@ -76,7 +104,7 @@ export const VoucherSaleForm: React.FC<{
       setBuyTried(true);
       toast(
         en ? 'Enter the hotel cost' : '호텔 원가를 입력하세요',
-        `${noCost.map((l) => l.label).join(', ')} — ${en ? 'type the hotel price in the Hotel column (0 = free from the hotel)' : '호텔 열에 단가 입력 (0 = 호텔 무료)'}`,
+        `${noCost.map((l) => l.label).join(', ')} — ${en ? 'type the hotel price in the Hotel column (0 = free from the hotel), or pick From stock' : '호텔 열에 단가 입력 (0 = 호텔 무료) 또는 재고 사용 선택'}`,
         'bad'
       );
       return;
@@ -100,7 +128,7 @@ export const VoucherSaleForm: React.FC<{
     // its purchase from the hotel, dated on the purchase date (= that month's hotel bill)
     if (setPurchases) {
       const id = linkedPurchaseId(sale.id);
-      const lines = buyLines.filter((l) => l.qty > 0).map((l) => ({ id: uid(), kind: l.kind, item: l.item, qty: l.qty, unitCost: l.unitCost }));
+      const lines = buyLines.filter((l) => l.qty > 0 && !l.stock).map((l) => ({ id: uid(), kind: l.kind, item: l.item, qty: l.qty, unitCost: l.unitCost }));
       setPurchases((prev) => {
         const old = prev.find((p) => p.id === id);
         if (!lines.length || buySkipped) return old ? prev.filter((p) => p.id !== id) : prev;
@@ -152,8 +180,11 @@ export const VoucherSaleForm: React.FC<{
                 <th colSpan={2} className={`${GH} !static c !border-b-0 !pb-0 ${G}`}>{en ? 'Guest' : '손님'}</th>
               </tr>
               <tr>
-                <th className={`${HC} !static c w-[108px] ${SUB} ${G}`} title={en ? 'Complimentary from the hotel — ₱0 to Jupiter' : '호텔 무료 제공 — 주피터 ₱0'}>
-                  {en ? 'Complimentary' : '무료'}
+                <th
+                  className={`${HC} !static c w-[128px] ${SUB} ${G}`}
+                  title={en ? 'Buy now = bought from the hotel with this sale · From stock = vouchers bought earlier · Complimentary = ₱0 from the hotel' : '지금 구매 / 재고 사용 / 호텔 무료'}
+                >
+                  {en ? 'Source' : '출처'}
                 </th>
                 <th className={`${HC} !static c w-[128px] ${SUB}`}>{en ? 'Cost' : '원가'}</th>
                 <th className={`${GC} !static c w-[108px] ${SUB} ${G}`} title={en ? 'Complimentary for the guest — ₱0' : '손님 무료 — ₱0'}>
@@ -197,17 +228,39 @@ export const VoucherSaleForm: React.FC<{
                     {/* hotel */}
                     <td className={`${HC} c ${G}`}>
                       {useBuy && line && (
-                        <input
-                          type="checkbox"
-                          checked={line.free}
-                          onChange={() => setBuyCost(line.key, line.free ? lastCost.get(line.key) ?? null : 0)}
-                          title={en ? 'Complimentary from the hotel — ₱0 to Jupiter' : '호텔 무료 제공 — 주피터 ₱0'}
-                          className="w-4 h-4 accent-[#2e7a57] cursor-pointer align-middle"
-                        />
+                        <Select
+                          value={line.stock ? 'stock' : line.free ? 'free' : 'buy'}
+                          onChange={(e) => {
+                            const to = e.target.value;
+                            setSource((prev) => ({ ...prev, [line.key]: to === 'stock' ? 'stock' : 'buy' }));
+                            if (to === 'free') setBuyCost(line.key, 0);
+                            else if (to === 'buy' && line.free) setBuyCost(line.key, null);
+                          }}
+                          className="input input-sm w-[116px] mx-auto text-[12px]"
+                        >
+                          <option value="buy">{en ? 'Buy now' : '지금 구매'}</option>
+                          <option value="stock">{en ? 'From stock' : '재고 사용'}</option>
+                          <option value="free">{en ? 'Complimentary' : '호텔 무료'}</option>
+                        </Select>
                       )}
                     </td>
                     <td className={`${HC} c`}>
-                      {useBuy && line ? <HotelCostInput en={en} line={line} onCost={setBuyCost} warn={buyTried} /> : <span className="text-faint">—</span>}
+                      {useBuy && line ? (
+                        line.stock ? (
+                          <span
+                            className={`badge ${line.left >= line.qty ? 'badge-info' : 'badge-warn'} w-[108px] mx-auto justify-center h-7 num`}
+                            title={en ? 'Taken from vouchers already bought from the hotel (Hotel Purchases) — no new cost' : '이미 구매한 바우처 사용 — 추가 원가 없음'}
+                          >
+                            {line.left >= line.qty
+                              ? en ? `${line.left} in stock` : `재고 ${line.left}`
+                              : en ? `Only ${Math.max(line.left, 0)} left` : `재고 ${Math.max(line.left, 0)}뿐`}
+                          </span>
+                        ) : (
+                          <HotelCostInput en={en} line={line} onCost={setBuyCost} warn={buyTried} />
+                        )
+                      ) : (
+                        <span className="text-faint">—</span>
+                      )}
                     </td>
                     {/* guest */}
                     <td className={`${GC} c ${G}`}>
@@ -244,7 +297,20 @@ export const VoucherSaleForm: React.FC<{
                     </div>
                   </td>
                   <td className={`${HC} ${G}`} />
-                  <td className={`${HC} c num`}>{useBuy ? peso(buyCost) : <span className="text-faint">—</span>}</td>
+                  <td className={`${HC} c num`}>
+                    {useBuy ? (
+                      <>
+                        {peso(buyCost)}
+                        {fromStock > 0 && (
+                          <div className="text-[10.5px] font-normal text-muted">
+                            + {fromStock} {en ? 'from stock' : '재고 사용'}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-faint">—</span>
+                    )}
+                  </td>
                   <td className={`${GC} ${G}`} />
                   <td className={`${GC} c num`}>{peso(total)}</td>
                 </tr>

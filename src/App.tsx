@@ -553,7 +553,7 @@ export default function App() {
           collapsed={sidebarCollapsed}
           setCollapsed={setSidebarCollapsed}
           language={language}
-          // Clear data is hidden for now — add back: onClearData={() => setClearOpen(true)}
+          onClearData={() => setClearOpen(true)}
         />
 
         <main className="flex-1 min-w-0 overflow-y-auto rounded-2xl">

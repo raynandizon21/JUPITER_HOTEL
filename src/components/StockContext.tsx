@@ -64,3 +64,17 @@ export const StockWarning: React.FC<{
     </div>
   );
 };
+
+/**
+ * What is left in stock per item (stock key → left), for a form that is being filled in.
+ * `exclude` leaves out the booking / voucher sale being edited and its own linked purchase (`buy-<id>`).
+ */
+export const useStockLeft = (en: boolean, exclude?: { reservationId?: string; voucherSaleId?: string }): Map<string, number> => {
+  const ctx = useContext(StockContext);
+  const ownId = exclude?.reservationId ?? exclude?.voucherSaleId;
+  return useMemo(() => {
+    if (!ctx) return new Map();
+    const purchases = ownId ? ctx.purchases.filter((p) => p.id !== `buy-${ownId}`) : ctx.purchases;
+    return new Map(buildStock(purchases, ctx.reservations, ctx.voucherSales, ctx.rates, en, exclude).map((r) => [r.key, r.left]));
+  }, [ctx, en, exclude?.reservationId, exclude?.voucherSaleId, ownId]);
+};

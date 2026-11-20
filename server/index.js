@@ -243,6 +243,7 @@ async function ensureColumns() {
     ['booking_charges', 'IS_FREE', "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1 = complimentary, charged 0' AFTER `UNIT_PRICE`"],
     ['voucher_sale_items', 'IS_FREE', "TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1 = complimentary, charged 0' AFTER `UNIT_PRICE`"],
     ['booking_payments', 'RECORDED_AT', "DATETIME NULL COMMENT 'when the payment was first recorded (kept when the list is re-saved)' AFTER `REFERENCE`"],
+    ['booking', 'ROOM_NO', "VARCHAR(20) NULL COMMENT 'hotel room number, typed in by staff' AFTER `CONFIRM_NUM`"],
     ['hotel_payments', 'FUND', "ENUM('room','voucher') NOT NULL DEFAULT 'room' COMMENT 'fund it was paid from' AFTER `METHOD`"],
     ['hotel_payments', 'RECORDED_AT', "DATETIME NULL COMMENT 'when the payment was first recorded (kept when the list is re-saved)' AFTER `REMARKS`"],
     ['voucher_sale_payments', 'RECORDED_AT', "DATETIME NULL COMMENT 'when the payment was first recorded (kept when the list is re-saved)' AFTER `REFERENCE`"],
@@ -430,6 +431,7 @@ app.get(
     const reservations = bookings.map((b) => ({
       id: b.APP_ID,
       confirmationNo: b.CONFIRM_NUM || '',
+      roomNo: b.ROOM_NO || '',
       guestName: b.GUEST_NAME,
       agentName: b.AGENT_NAME || '',
       roomType: b.ROOM_NAME,
@@ -670,6 +672,7 @@ app.put(
         r.currency === 'KRW' ? 'KRW' : 'PHP',
         r.remarks ? String(r.remarks).slice(0, 500) : null,
         r.isJupiterGuest === false ? 0 : 1,
+        String(r.roomNo || '').trim().slice(0, 20) || null,
       ];
       // Explicit update-or-insert by APP_ID (not ON DUPLICATE KEY: CONFIRM_NUM is unique too,
       // and a clash there must be an error, never an update of another booking).
@@ -679,15 +682,15 @@ app.put(
         bookingId = found[0].IDNo;
         await conn.query(
           `UPDATE booking SET CONFIRM_NUM = ?, GUEST_NAME = ?, AGENT_ID = ?, ROOM_TYPE_ID = ?, OCCUPANCY = ?, HOLIDAY_DATES = ?, COMP_DATES = ?, CHECK_IN = ?,
-             CHECK_OUT = ?, ROOM_AMOUNT = ?, CURRENCY = ?, REMARKS = ?, IS_JUPITER_GUEST = ?, ACTIVE = 1, EDITED_BY = ?
+             CHECK_OUT = ?, ROOM_AMOUNT = ?, CURRENCY = ?, REMARKS = ?, IS_JUPITER_GUEST = ?, ROOM_NO = ?, ACTIVE = 1, EDITED_BY = ?
            WHERE IDNo = ?`,
           [...vals, SYSTEM_USER, bookingId]
         );
       } else {
         const [ins] = await conn.query(
           `INSERT INTO booking
-             (CONFIRM_NUM, GUEST_NAME, AGENT_ID, ROOM_TYPE_ID, OCCUPANCY, HOLIDAY_DATES, COMP_DATES, CHECK_IN, CHECK_OUT, ROOM_AMOUNT, CURRENCY, REMARKS, IS_JUPITER_GUEST, APP_ID, BOOKED_BY)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (CONFIRM_NUM, GUEST_NAME, AGENT_ID, ROOM_TYPE_ID, OCCUPANCY, HOLIDAY_DATES, COMP_DATES, CHECK_IN, CHECK_OUT, ROOM_AMOUNT, CURRENCY, REMARKS, IS_JUPITER_GUEST, ROOM_NO, APP_ID, BOOKED_BY)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [...vals, id, SYSTEM_USER]
         );
         bookingId = ins.insertId;

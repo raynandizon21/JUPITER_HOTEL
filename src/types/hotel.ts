@@ -37,6 +37,8 @@ export interface Reservation {
   compDates?: string[]; // complimentary (free) nights — charged ₱0
   /** Confirmation number given by the hotel (typed in by staff; unique across bookings). */
   confirmationNo?: string;
+  /** Hotel room number the guest is in (typed in by staff, optional). */
+  roomNo?: string;
   /** Agent who sent the guest (from the Agents list; new names are added on save). */
   agentName?: string;
   oic?: string; // hotel officer-in-charge who handled the booking

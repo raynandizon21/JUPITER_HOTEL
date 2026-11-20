@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS `booking` (
   `IDNo`           INT           NOT NULL AUTO_INCREMENT,
   `APP_ID`         VARCHAR(50)   NOT NULL COMMENT 'the app''s own booking id (key for saving)',
   `CONFIRM_NUM`    VARCHAR(50)   NULL COMMENT 'hotel confirmation number, typed in by staff (unique)',
+  `ROOM_NO`        VARCHAR(20)   NULL COMMENT 'hotel room number, typed in by staff',
   `ACCT_NUM`       VARCHAR(50)   NULL COMMENT 'optional account no.',
   `GUEST_NAME`     VARCHAR(150)  NOT NULL,
   `AGENT_ID`       INT           NULL COMMENT 'agents.IDNo',

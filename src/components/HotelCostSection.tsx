@@ -11,7 +11,7 @@ export interface BuyLine {
   unitCost: number;
   /** of `qty`, given complimentary by the hotel (room nights ticked in the Hotel column) */
   compQty: number;
-  /** a cost was typed (or filled from the last price paid); false = still empty */
+  /** a cost was typed; false = still empty */
   entered: boolean;
   free: boolean;
 }
@@ -74,12 +74,3 @@ export const HG = {
   GC: '!bg-ok-soft/45',
 };
 
-/** Last wholesale price paid per item (stock key) — the default hotel cost. ₱0 (free) lines are skipped. */
-export const lastCostOf = (purchases: { date: string; items: { kind: 'room' | 'voucher'; item: string; unitCost: number }[] }[]) => {
-  const m = new Map<string, number>();
-  purchases
-    .slice()
-    .sort((a, b) => a.date.localeCompare(b.date))
-    .forEach((p) => p.items.forEach((i) => i.unitCost > 0 && m.set(`${i.kind}:${i.item}`, i.unitCost)));
-  return m;
-};

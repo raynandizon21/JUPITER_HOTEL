@@ -331,6 +331,10 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
         const received = guestMoney.rooms.paid + guestMoney.vouchers.paid;
         const unpaidTotal = guestMoney.rooms.unpaid + guestMoney.vouchers.unpaid;
         const noBill = s.billed === 0 && s.settled === 0;
+        // Hotel Bill card = what is still owed: each fund's purchases − payments from that fund
+        const owed = (f: 'room' | 'voucher') => Math.max(fundBill[f] - fundPaid[f], 0);
+        const owedRow = (f: 'room' | 'voucher'): [string, string] =>
+          fundBill[f] > 0 && owed(f) === 0 ? [en ? 'Paid' : '지급 완료', 'text-ok'] : [php(owed(f)), 'text-ink'];
         return (
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 mb-4">
             <StatCard
@@ -338,12 +342,16 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
               Icon={Wallet}
               color="blue"
               label={en ? 'Hotel Bill' : '호텔 청구액'}
-              note={`${s.purchases} ${en ? (s.purchases === 1 ? 'purchase' : 'purchases') : '건'}`}
-              value={php(s.billed)}
-              valueClass="text-accent"
+              note={
+                s.settled > 0
+                  ? `${en ? 'Left to pay of' : '미지급 / 총'} ${php(s.billed)}`
+                  : `${s.purchases} ${en ? (s.purchases === 1 ? 'purchase' : 'purchases') : '건'}`
+              }
+              value={php(s.balance)}
+              valueClass={s.billed > 0 && s.balance === 0 ? 'text-ok' : 'text-accent'}
               rows={[
-                [BedDouble, en ? 'Rooms' : '객실', php(fundBill.room)],
-                [Ticket, en ? 'Vouchers' : '바우처', php(fundBill.voucher)],
+                [BedDouble, en ? 'Rooms' : '객실', ...owedRow('room')],
+                [Ticket, en ? 'Vouchers' : '바우처', ...owedRow('voucher')],
               ]}
               onClick={() => setShowBought(true)}
             />

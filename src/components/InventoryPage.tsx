@@ -63,15 +63,6 @@ export const InventoryPage: React.FC<{
   const stockCur = Math.min(stockPage, stockPages - 1);
   const stockRows = tabStock.slice(stockCur * stockFit, stockCur * stockFit + stockFit);
 
-  // last wholesale price paid per item — the default for the next purchase
-  const lastCost = useMemo(() => {
-    const m = new Map<string, number>();
-    purchases
-      .slice()
-      .sort((a, b) => a.date.localeCompare(b.date))
-      .forEach((p) => p.items.forEach((i) => m.set(`${i.kind}:${i.item}`, i.unitCost)));
-    return m;
-  }, [purchases]);
 
   return (
     <div className="flex-1 flex flex-col">
@@ -271,7 +262,6 @@ export const InventoryPage: React.FC<{
           initial={editing === 'new' ? null : editing}
           defaultKind={tab}
           rates={casinoRates}
-          lastCost={lastCost}
           onCancel={() => setEditing(null)}
           onSave={(p) => {
             const isNew = editing === 'new';
@@ -345,12 +335,11 @@ const PurchaseDialog: React.FC<{
   en: boolean;
   initial: HotelPurchase | null;
   rates: CasinoRatesConfig;
-  lastCost: Map<string, number>;
   /** the tab it was opened from: the first line starts as a room or a voucher */
   defaultKind: 'room' | 'voucher';
   onCancel: () => void;
   onSave: (p: HotelPurchase) => void;
-}> = ({ en, initial, rates, lastCost, defaultKind, onCancel, onSave }) => {
+}> = ({ en, initial, rates, defaultKind, onCancel, onSave }) => {
   const [date, setDate] = useState(initial?.date ?? todayISO());
   const [reference, setReference] = useState(initial?.reference ?? '');
   const [remarks, setRemarks] = useState(initial?.remarks ?? '');
@@ -363,7 +352,7 @@ const PurchaseDialog: React.FC<{
   const options = optionsOf(kind);
   const newLine = (value = options[0]?.value ?? 'voucher:breakfast'): PurchaseItem => {
     const [kind, item] = value.split(':') as ['room' | 'voucher', string];
-    return { id: uid(), kind, item, qty: 1, unitCost: lastCost.get(value) ?? 0 };
+    return { id: uid(), kind, item, qty: 1, unitCost: 0 }; // no default cost — typed each time
   };
   const [items, setItems] = useState<PurchaseItem[]>(initial?.items.map((i) => ({ ...i })) ?? [newLine()]);
   const switchKind = (k: 'room' | 'voucher') => {
@@ -371,7 +360,7 @@ const PurchaseDialog: React.FC<{
     setKind(k);
     const first = optionsOf(k)[0]?.value ?? 'voucher:breakfast';
     const [ik, item] = first.split(':') as ['room' | 'voucher', string];
-    setItems([{ id: uid(), kind: ik, item, qty: 1, unitCost: lastCost.get(first) ?? 0 }]); // lines of the other kind are cleared
+    setItems([{ id: uid(), kind: ik, item, qty: 1, unitCost: 0 }]); // lines of the other kind are cleared
     setFreeIds(new Set());
   };
   // lines given free by the hotel (e.g. 20 complimentary rooms): cost ₱0, still added to stock
@@ -384,8 +373,6 @@ const PurchaseDialog: React.FC<{
       else next.add(i.id);
       return next;
     });
-    // unticked: bring back the last price paid for this item
-    if (wasFree && !i.unitCost) set(i.id, { unitCost: lastCost.get(`${i.kind}:${i.item}`) ?? 0 });
   };
   const costOf = (i: PurchaseItem) => (freeIds.has(i.id) ? 0 : i.unitCost);
   // one line per item: picking an item that is already listed (same Free setting) adds this qty to that line
@@ -397,7 +384,7 @@ const PurchaseDialog: React.FC<{
       toast(en ? 'Merged with the same item' : '같은 항목에 합쳐짐', `${itemLabel({ kind, item }, rates, en)} × ${same.qty + line.qty}`, 'info');
       return;
     }
-    set(line.id, { kind, item, unitCost: lastCost.get(value) ?? line.unitCost });
+    set(line.id, { kind, item });
   };
   // "Add line" starts with an item that is not listed yet
   const addLine = () => {
@@ -406,7 +393,8 @@ const PurchaseDialog: React.FC<{
   };
   const set = (id: string, patch: Partial<PurchaseItem>) => setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)));
   const total = items.reduce((a, i) => a + i.qty * costOf(i), 0);
-  const valid = date && items.length > 0 && items.every((i) => i.qty > 0);
+  // every line needs a cost (or Free): an empty cost is not saved as ₱0 by mistake
+  const valid = date && items.length > 0 && items.every((i) => i.qty > 0 && (freeIds.has(i.id) || i.unitCost > 0));
   const num = (v: string) => parseInt(v.replace(/\D/g, ''), 10) || 0;
 
   return (
@@ -434,7 +422,7 @@ const PurchaseDialog: React.FC<{
           </div>
           <div>
             <label className="field-label">{en ? 'Hotel reference / invoice no.' : '호텔 참조 / 송장 번호'}</label>
-            <input id="purchase-ref" value={reference} onChange={(e) => setReference(e.target.value)} placeholder={en ? 'Optional' : '선택'} className="input" />
+            <input id="purchase-ref" autoComplete="off" value={reference} onChange={(e) => setReference(e.target.value)} placeholder={en ? 'Optional' : '선택'} className="input" />
           </div>
         </div>
 
@@ -469,7 +457,7 @@ const PurchaseDialog: React.FC<{
                       </Select>
                     </td>
                     <td className="c">
-                      <input inputMode="numeric" value={i.qty || ''} onChange={(e) => set(i.id, { qty: num(e.target.value) })} className="input input-sm num text-center" />
+                      <input inputMode="numeric" autoComplete="off" value={i.qty || ''} onChange={(e) => set(i.id, { qty: num(e.target.value) })} className="input input-sm num text-center" />
                     </td>
                     <td className="c">
                       <FreeCheck checked={freeIds.has(i.id)} onChange={() => toggleFree(i)} en={en} />
@@ -479,6 +467,8 @@ const PurchaseDialog: React.FC<{
                         <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[12px] text-faint">₱</span>
                         <input
                           inputMode="numeric"
+                          autoComplete="off"
+                          placeholder={en ? 'Required' : '필수'}
                           value={freeIds.has(i.id) ? '0' : i.unitCost ? i.unitCost.toLocaleString('en-US') : ''}
                           disabled={freeIds.has(i.id)}
                           onChange={(e) => set(i.id, { unitCost: num(e.target.value) })}
@@ -522,7 +512,7 @@ const PurchaseDialog: React.FC<{
 
         <div>
           <label className="field-label">{en ? 'Remarks' : '비고'}</label>
-          <input id="purchase-remarks" value={remarks} onChange={(e) => setRemarks(e.target.value)} className="input" />
+          <input id="purchase-remarks" autoComplete="off" value={remarks} onChange={(e) => setRemarks(e.target.value)} className="input" />
         </div>
       </div>
       <div className="px-6 py-4 border-t border-line bg-sunken flex items-center justify-between gap-2">

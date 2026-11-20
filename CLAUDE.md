@@ -9,7 +9,7 @@ Guidance for Claude (and other contributors) working in this repo.
 - Guests are billed per booking (room charge + extras − payments = balance).
 - Every month Jupiter settles the total with the hotel.
 
-Stack: React 19 · Vite 8 · Tailwind CSS v4 · TypeScript · lucide-react · exceljs (lazy-loaded for Excel export).
+Stack: React 19 · Vite 8 · Tailwind CSS v4 · TypeScript · lucide-react · exceljs (lazy-loaded for Excel export) · jspdf + html2canvas-pro (lazy-loaded for PDF download).
 
 ## Commands
 
@@ -100,6 +100,7 @@ To check for dead code, run `npx tsc --noEmit --noUnusedLocals --noUnusedParamet
 | `src/components/VoucherSaleForm.tsx` | Voucher-only purchase form (New Booking → Vouchers only; ledger edit) |
 | `src/components/GuestFolio.tsx` | Guest billing pop-up (charges, payments, print) |
 | `src/components/ReservationCalendar.tsx` | Month calendar; clicking a booking opens billing |
+| `src/components/HotelBillingReport.tsx` | Hotel Billing Report (sidebar, Hotel): the hotel's Monthly Billing Report rebuilt from bookings — days of the month (2 halves) with rooms / pax / junket-rate total; a day opens the breakdown in the hotel sheet format (dynamic: only room types / buffet items used that day; sections Room Category at the day rate · Triple Sharing · Buffet Category; Daily Total spanning the right column). The day list is `DailyBillList` (+ `useMonthBill`), also shown in the Dashboard Hotel Bill pop-up (tabs *Every day* (default) | *Purchases*). Excel + PDF (real .pdf download via lazy-loaded `jspdf` + `html2canvas-pro`, `savePdf`) for the month (summary + every day with activity, signature lines) and for one day (pop-up footer) |
 | `src/components/RoomRatesMaintenance.tsx` | Rate grid with Settings edit mode |
 | `src/components/RateCalculator.tsx` | Night-by-night quote → book |
 | `src/utils/excelExport.ts` | Monthly settlement + daily settlement `.xlsx` |

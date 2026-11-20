@@ -1,5 +1,5 @@
 import React from 'react';
-import { LayoutGrid, CalendarRange, BookOpenText, CalendarDays, SlidersHorizontal, Calculator, Menu, UserRound, PiggyBank, Trash2, ShoppingCart, Workflow } from 'lucide-react';
+import { LayoutGrid, CalendarRange, BookOpenText, CalendarDays, SlidersHorizontal, Calculator, Menu, UserRound, PiggyBank, Trash2, ShoppingCart, Workflow, FileText } from 'lucide-react';
 import { ActiveModule } from '../types/hotel';
 import { Language, translations } from '../i18n/translations';
 
@@ -39,6 +39,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeModule, setActiveModule,
       label: en ? 'Hotel' : '호텔',
       items: [
         { id: 'inventory', label: en ? 'Hotel Purchases' : '호텔 구매', Icon: ShoppingCart },
+        { id: 'hotelBill', label: en ? 'Hotel Billing Report' : '호텔 청구 보고서', Icon: FileText },
         { id: 'maintenance', label: t.navMaintenance, Icon: SlidersHorizontal },
       ],
     },

@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { DailySettlement, bookingDays } from './DailySettlement';
+import { DailyBillList, useMonthBill } from './HotelBillingReport';
 import { Reservation, CasinoRatesConfig, Settlement, PaymentMethod, FolioPayment, VoucherSale, HotelPurchase, FundTxn } from '../types/hotel';
 import { buildFundEntries } from './FundPage';
 import { itemLabel, purchaseTotal } from '../utils/inventory';
@@ -75,6 +76,9 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
   const monthRes = useMemo(() => reservations.filter((r) => r.checkIn.slice(0, 7) === month), [reservations, month]);
   const hotelPays = settlementOf(settlements, month).payments;
   const monthPurchases = useMemo(() => purchases.filter((p) => p.date.slice(0, 7) === month), [purchases, month]);
+  // Hotel Bill pop-up: purchases list, or every day like the hotel's Monthly Billing Report
+  const [billTab, setBillTab] = useState<'purchases' | 'daily'>('daily');
+  const monthBill = useMonthBill(month, reservations, voucherSales, casinoRates);
   // Guest money this month — the SAME rule as the Daily Settlement table, so every number tallies:
   // a booking counts only its nights (and extras) that fall in this month, its payments covering the
   // earliest days first; vouchers-only sales count by their sale date.
@@ -725,63 +729,117 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
       {/* Hotel Bill → what was bought from the hotel this month */}
       {showBought && (
         <Dialog
-          width="max-w-3xl"
+          width="max-w-4xl"
           onClose={() => setShowBought(false)}
           title={en ? `Hotel Bill · ${formatMonth(month)}` : `호텔 청구액 · ${formatMonth(month)}`}
-          subtitle={en ? 'Rooms and vouchers bought from the hotel this month' : '이 달 호텔에서 구매한 객실·바우처'}
+          subtitle={
+            billTab === 'purchases'
+              ? en ? 'Rooms and vouchers bought from the hotel this month' : '이 달 호텔에서 구매한 객실·바우처'
+              : en ? 'Every day, like the hotel’s Monthly Billing Report (junket rates) — click a day for its breakdown' : '호텔 월간 청구 보고서와 같은 일별 내역 — 날짜를 누르면 상세'
+          }
         >
+          <div className="px-6 pt-4">
+            <div className="seg w-full">
+              <button type="button" data-active={billTab === 'daily'} onClick={() => setBillTab('daily')} className="flex-1">
+                {en ? 'Every day' : '일별'}
+              </button>
+              <button type="button" data-active={billTab === 'purchases'} onClick={() => setBillTab('purchases')} className="flex-1">
+                {en ? 'Purchases' : '구매 내역'}
+              </button>
+            </div>
+          </div>
+          {billTab === 'daily' ? (
+            <div className="mx-6 my-4 rounded-xl border border-line overflow-hidden">
+              <DailyBillList month={month} bill={monthBill} rates={casinoRates} en={en} />
+            </div>
+          ) : (
           <div className="px-6 py-4">
             {monthPurchases.length === 0 ? (
               <div className="py-10 text-center text-[13px] text-muted">{en ? 'Nothing bought from the hotel this month yet.' : '이 달 호텔 구매가 없습니다.'}</div>
             ) : (
-              <table className="dtable compact">
-                <thead>
-                  <tr>
-                    <th>{en ? 'Date' : '날짜'}</th>
-                    <th>{en ? 'Item' : '항목'}</th>
-                    <th className="c">{en ? 'Fund' : '자금'}</th>
-                    <th className="c">{en ? 'Qty' : '수량'}</th>
-                    <th className="r">{en ? 'Unit cost' : '단가'}</th>
-                    <th className="r">{en ? 'Amount' : '금액'}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {monthPurchases.flatMap((p) =>
-                    p.items.map((i) => (
-                      <tr key={i.id}>
-                        <td className="whitespace-nowrap text-ink-2">
-                          {formatLongDate(p.date)}
-                          {p.reference && <div className="text-[11px] text-muted">{p.reference}</div>}
-                        </td>
-                        <td>
-                          <span className={`inline-flex items-center gap-2 font-medium ${i.kind === 'room' ? 'text-accent' : 'text-warn'}`}>
-                            {i.kind === 'room' ? <BedDouble className="w-4 h-4" /> : <Ticket className="w-4 h-4" />}
-                            <span className="text-ink">{itemLabel(i, casinoRates, en)}</span>
+              (() => {
+                // one section per fund: Rooms (Room fund) and Vouchers (Voucher fund), like the two lines on the card
+                const lines = monthPurchases
+                  .flatMap((p) => p.items.map((i) => ({ p, i })))
+                  .sort((x, y) => x.p.date.localeCompare(y.p.date));
+                const groups = (
+                  [
+                    ['room', BedDouble, en ? 'Rooms' : '객실', en ? 'Room fund' : '객실 자금', '!bg-accent-soft !text-accent', 'text-accent'],
+                    ['voucher', Ticket, en ? 'Vouchers' : '바우처', en ? 'Voucher fund' : '바우처 자금', '!bg-warn-soft !text-warn', 'text-warn'],
+                  ] as const
+                )
+                  .map(([kind, Icon, label, fund, head, tone]) => {
+                    const rows = lines.filter((x) => x.i.kind === kind);
+                    return { kind, Icon, label, fund, head, tone, rows, qty: rows.reduce((a, x) => a + x.i.qty, 0), amt: rows.reduce((a, x) => a + x.i.qty * x.i.unitCost, 0) };
+                  })
+                  .filter((g) => g.rows.length);
+                // where it came from: bought with a booking / voucher sale (its remarks), or a bulk purchase
+                const forOf = (p: (typeof monthPurchases)[number]) =>
+                  p.id.startsWith('buy-') ? p.remarks || '—' : p.id === 'opening-stock' ? (en ? 'Opening stock' : '기초 재고') : en ? 'Bought for stock' : '재고 구매';
+                return (
+                  <table className="dtable compact">
+                    <thead>
+                      <tr>
+                        <th>{en ? 'Date' : '날짜'}</th>
+                        <th>{en ? 'Item' : '항목'}</th>
+                        <th>{en ? 'For' : '용도'}</th>
+                        <th className="c">{en ? 'Qty' : '수량'}</th>
+                        <th className="r">{en ? 'Unit cost' : '단가'}</th>
+                        <th className="r">{en ? 'Amount' : '금액'}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {groups.map((g) => (
+                        <React.Fragment key={g.kind}>
+                          <tr className="hover:!bg-transparent">
+                            <td colSpan={3} className={`${g.head} !py-1.5 font-semibold`}>
+                              <span className="inline-flex items-center gap-2">
+                                <g.Icon className="w-4 h-4" />
+                                {g.label}
+                                <span className="text-[11px] font-normal opacity-80">· {g.fund}</span>
+                              </span>
+                            </td>
+                            <td className={`${g.head} !py-1.5 c num font-semibold`}>{g.qty}</td>
+                            <td className={`${g.head} !py-1.5`} />
+                            <td className={`${g.head} !py-1.5 r num font-semibold`}>{php(g.amt)}</td>
+                          </tr>
+                          {g.rows.map(({ p, i }) => (
+                            <tr key={i.id}>
+                              <td className="whitespace-nowrap text-ink-2 !pl-8">
+                                {formatLongDate(p.date)}
+                                {p.reference && <div className="text-[11px] text-muted">{p.reference}</div>}
+                              </td>
+                              <td className="text-ink font-medium">{itemLabel(i, casinoRates, en)}</td>
+                              <td className="text-[12px] text-muted max-w-[220px] truncate" title={forOf(p)}>
+                                {forOf(p)}
+                              </td>
+                              <td className="c num">{i.qty}</td>
+                              <td className="r num text-ink-2">{i.unitCost ? php(i.unitCost) : <span className="text-ok">{en ? 'Free' : '무료'}</span>}</td>
+                              <td className="r num font-semibold text-ink">{php(i.qty * i.unitCost)}</td>
+                            </tr>
+                          ))}
+                        </React.Fragment>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr>
+                        <td colSpan={3} className="!bg-ink !text-[#e9c46a]">
+                          {en ? `Hotel Bill for ${formatMonth(month)}` : `${formatMonth(month)} 호텔 청구액`}{' '}
+                          <span className="font-normal opacity-80">
+                            · {monthPurchases.length} {en ? (monthPurchases.length === 1 ? 'purchase' : 'purchases') : '건'}
                           </span>
                         </td>
-                        <td className="c">
-                          <span className={`badge ${i.kind === 'voucher' ? 'badge-warn' : 'badge-info'}`}>{i.kind === 'voucher' ? (en ? 'Voucher' : '바우처') : en ? 'Room' : '객실'}</span>
-                        </td>
-                        <td className="c num">{i.qty}</td>
-                        <td className="r num text-ink-2">{i.unitCost ? php(i.unitCost) : <span className="text-ok">{en ? 'Free' : '무료'}</span>}</td>
-                        <td className="r num font-semibold text-ink">{php(i.qty * i.unitCost)}</td>
+                        <td className="!bg-ink !text-[#e9c46a] c num">{groups.reduce((a, g) => a + g.qty, 0)}</td>
+                        <td className="!bg-ink" />
+                        <td className="!bg-ink !text-[#e9c46a] r num text-[14px]">{php(s.billed)}</td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-                <tfoot>
-                  <tr>
-                    <td colSpan={3}>
-                      {en ? 'Hotel Bill' : '호텔 청구액'} <span className="text-muted font-normal">· {monthPurchases.length} {en ? (monthPurchases.length === 1 ? 'purchase' : 'purchases') : '건'}</span>
-                    </td>
-                    <td className="c num">{monthPurchases.reduce((a, p) => a + p.items.reduce((b, i) => b + i.qty, 0), 0)}</td>
-                    <td />
-                    <td className="r num text-ink">{php(s.billed)}</td>
-                  </tr>
-                </tfoot>
-              </table>
+                    </tfoot>
+                  </table>
+                );
+              })()
             )}
           </div>
+          )}
           <div className="px-6 py-3 border-t border-line bg-sunken flex justify-end gap-2">
             <button onClick={() => setShowBought(false)} className="btn btn-ghost">
               {en ? 'Close' : '닫기'}

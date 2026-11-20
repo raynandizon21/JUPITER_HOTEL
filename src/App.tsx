@@ -12,6 +12,7 @@ import { ClearDataDialog } from './components/ClearDataDialog';
 import { InventoryPage } from './components/InventoryPage';
 import { WorkflowPage } from './components/WorkflowPage';
 import { StockProvider } from './components/StockContext';
+import { HotelBillingReport } from './components/HotelBillingReport';
 import { PH_HOLIDAYS } from './data/phHolidays';
 import { LanguageSelector } from './components/LanguageSelector';
 import jupiterLogo from './logo.jpg';
@@ -422,6 +423,17 @@ export default function App() {
             voucherSales={voucherSales}
             settlements={settlements}
             rates={casinoRates}
+          />
+        );
+      case 'hotelBill':
+        return (
+          <HotelBillingReport
+            reservations={reservations}
+            voucherSales={voucherSales}
+            casinoRates={casinoRates}
+            selectedMonth={selectedMonth}
+            setSelectedMonth={setSelectedMonth}
+            language={language}
           />
         );
       case 'inventory':

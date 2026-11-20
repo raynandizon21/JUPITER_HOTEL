@@ -114,7 +114,7 @@ export interface HotelPurchase {
   items: PurchaseItem[];
 }
 
-export type ActiveModule = 'dashboard' | 'daily' | 'ledger' | 'calendar' | 'maintenance' | 'calculator' | 'agents' | 'fund' | 'inventory' | 'workflow';
+export type ActiveModule = 'dashboard' | 'daily' | 'ledger' | 'calendar' | 'maintenance' | 'calculator' | 'agents' | 'fund' | 'inventory' | 'hotelBill' | 'workflow';
 
 /** Philippine holiday (table `holidays`). */
 export interface Holiday {

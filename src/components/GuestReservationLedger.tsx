@@ -7,11 +7,11 @@ import { folioOf, syncStatus, uid, peso, nowStamp, todayISO, voucherTotals, char
 import { Language, translations } from '../i18n/translations';
 import { PageHeader, Dialog, ConfirmDialog, ComboInput, Pager, toast, Select } from './ui';
 import { VoucherSaleForm, VoucherItemsEditor } from './VoucherSaleForm';
-import { StockWarning } from './StockContext';
+import { StockWarning, useStockLeft } from './StockContext';
 import { HolidaysMaintenance } from './HolidaysMaintenance';
 import { DateFilter } from './DateFilter';
 import { NightRateText, ChargeAmountText } from './StayBreakdown';
-import { HotelCostInput, BuyLine, linkedPurchaseId, HG } from './HotelCostSection';
+import { HotelCostInput, BuyLine, linkedPurchaseId, HG, SourceSelect, StockBadge, VoucherSource } from './HotelCostSection';
 import { chargeStockItem, itemLabel, stockKey } from '../utils/inventory';
 
 interface GuestReservationLedgerProps {
@@ -140,10 +140,14 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
   const [noLink, setNoLink] = useState(false);
   // typed hotel cost per item: number (0 = free from the hotel) or null = cleared
   const [buyCosts, setBuyCosts] = useState<Record<string, number | null>>({});
+  // voucher source per kind: 'buy' = bought with this booking, 'stock' = from vouchers bought earlier
+  const [voucherSource, setVoucherSource] = useState<Record<string, VoucherSource>>({});
   // Save was pressed with a hotel cost still empty → highlight it
   const [buyTried, setBuyTried] = useState(false);
   // nights the hotel gives complimentary (₱0 in the hotel purchase; the guest side is separate)
   const [hotelComps, setHotelComps] = useState<string[]>([]);
+  // room nights taken from room-nights bought earlier (Hotel Purchases) — not in this booking's purchase
+  const [roomStock, setRoomStock] = useState<string[]>([]);
 
   // Night-by-night charges from the Room Rates master (holiday nights use the weekend rate)
   const nightly = useMemo(() => {
@@ -196,7 +200,9 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
     setFormKind('room');
     setNoLink(false);
     setBuyCosts({});
+    setVoucherSource({});
     setHotelComps([]);
+    setRoomStock([]);
     setBuyTried(false);
     setAmountTouched(false);
     setConfirming(false);
@@ -238,14 +244,33 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
     setNoLink(!linked);
     const items = linked?.items || [];
     const roomCompQty = items.filter((i) => i.kind === 'room' && !i.unitCost).reduce((a, i) => a + i.qty, 0);
-    const hasPaidRoom = items.some((i) => i.kind === 'room' && i.unitCost > 0);
+    const roomPaidQty = items.filter((i) => i.kind === 'room' && i.unitCost > 0).reduce((a, i) => a + i.qty, 0);
+    const hasPaidRoom = roomPaidQty > 0;
+    // nights not in its own purchase came from room stock (order: complimentary, bought, stock)
+    const stayNights = getStayNights(res.checkIn, res.checkOut);
+    const stockNights = linked ? stayNights.slice(roomCompQty + roomPaidQty) : [];
+    setRoomStock(stockNights);
     setBuyCosts(
       Object.fromEntries(
-        items.filter((i) => i.kind === 'voucher' || i.unitCost > 0 || !hasPaidRoom).map((i) => [stockKey(i.kind, i.item), i.unitCost])
+        items
+          .filter((i) => i.kind === 'voucher' || i.unitCost > 0 || (!hasPaidRoom && !stockNights.length))
+          .map((i) => [stockKey(i.kind, i.item), i.unitCost])
       )
     );
+    // a voucher kind of the booking that is not in its own purchase came from stock
+    const own = new Set(items.map((i) => stockKey(i.kind, i.item)));
+    setVoucherSource(
+      linked
+        ? Object.fromEntries(
+            (res.charges || []).flatMap((c) => {
+              const v = chargeStockItem(c);
+              return v ? [[stockKey('voucher', v), own.has(stockKey('voucher', v)) ? 'buy' : 'stock']] : [];
+            })
+          )
+        : {}
+    );
     // nights cost the same, so which ones are complimentary only matters for the count
-    setHotelComps(hasPaidRoom ? getStayNights(res.checkIn, res.checkOut).slice(0, roomCompQty) : []);
+    setHotelComps(hasPaidRoom || stockNights.length ? stayNights.slice(0, roomCompQty) : []);
     setBuyTried(false);
     setAmountTouched(true); // keep the saved amount unless the user recalculates
     setConfirming(false);
@@ -267,7 +292,8 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
 
   const formRoomId = casinoRates.rooms.find((x) => x.name.toLowerCase() === formRoomType.toLowerCase())?.id ?? null;
   // quantities follow the booking: nights of its room type + its vouchers
-  const buyLines = useMemo<BuyLine[]>(() => {
+  const stockLeft = useStockLeft(en, editingReservation ? { reservationId: editingReservation.id } : undefined);
+  const buyLines = useMemo<(BuyLine & { stock: boolean; left: number; stockQty: number })[]>(() => {
     const need = new Map<string, number>();
     if (formRoomId && formNights > 0) need.set(stockKey('room', formRoomId), formNights);
     for (const c of editingReservation ? editingReservation.charges || [] : formVouchers) {
@@ -276,47 +302,78 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
     }
     return [...need].map(([key, qty]) => {
       const [kind, item] = key.split(':') as ['room' | 'voucher', string];
+      // vouchers: from stock when enough is left (unless picked otherwise) — no cost to type
+      const left = stockLeft.get(key) ?? 0;
+      const stock = kind === 'voucher' && (voucherSource[key] ?? (left >= qty ? 'stock' : 'buy')) === 'stock';
       // typed cost only — no default (empty = not entered yet)
-      const cost = key in buyCosts ? buyCosts[key] : null;
-      const compQty = kind === 'room' ? hotelComps.filter((d) => nightly.some((n) => n.date === d)).length : 0;
-      // every night complimentary → no price needed
-      const entered = (cost !== null && cost !== undefined) || (compQty > 0 && compQty === qty);
-      return { key, kind, item, qty, compQty, entered, free: entered && !cost, unitCost: cost ?? 0, label: itemLabel({ kind, item }, casinoRates, en) };
+      const cost = stock ? 0 : key in buyCosts ? buyCosts[key] : null;
+      const inStay = (d: string) => nightly.some((n) => n.date === d);
+      const stockQty = kind === 'room' ? roomStock.filter(inStay).length : stock ? qty : 0;
+      const compQty = kind === 'room' ? hotelComps.filter((d) => inStay(d) && !roomStock.includes(d)).length : 0;
+      // every night complimentary / from stock → no price needed
+      const entered = stock || (cost !== null && cost !== undefined) || (kind === 'room' && compQty + stockQty > 0 && compQty + stockQty === qty);
+      return {
+        key,
+        kind,
+        item,
+        qty,
+        compQty,
+        stockQty,
+        entered,
+        free: !stock && entered && !cost && compQty + stockQty < qty,
+        unitCost: cost ?? 0,
+        label: itemLabel({ kind, item }, casinoRates, en),
+        stock,
+        left,
+      };
     });
-  }, [formRoomId, formNights, editingReservation, formVouchers, buyCosts, hotelComps, nightly, casinoRates, en]);
-  const buyCost = buyLines.reduce((a, l) => a + (l.qty - l.compQty) * l.unitCost, 0);
-  const toggleHotelComp = (date: string) => setHotelComps((prev) => (prev.includes(date) ? prev.filter((d) => d !== date) : [...prev, date]));
+  }, [formRoomId, formNights, editingReservation, formVouchers, buyCosts, voucherSource, stockLeft, hotelComps, roomStock, nightly, casinoRates, en]);
+  const fromStock = buyLines.reduce((a, l) => a + l.stockQty, 0);
+  const buyCost = buyLines.reduce((a, l) => a + (l.qty - l.compQty - l.stockQty) * l.unitCost, 0);
+  // Source of one room night: bought with the booking, from room stock, or complimentary (₱0)
+  const pickNight = (date: string, to: 'buy' | 'stock' | 'free') => {
+    setRoomStock((prev) => (to === 'stock' ? [...prev.filter((d) => d !== date), date] : prev.filter((d) => d !== date)));
+    setHotelComps((prev) => (to === 'free' ? [...prev.filter((d) => d !== date), date] : prev.filter((d) => d !== date)));
+    // cost typed ₱0 = every night free: picking another source empties it so a price can be typed
+    if (to !== 'free' && roomBuy?.free) setBuyCost(roomBuy.key, null);
+  };
   const useBuy = !!setPurchases;
   // older booking, nothing typed in the Hotel column → leave it without a hotel purchase
-  const buySkipped = noLink && buyLines.every((l) => !l.entered);
+  const buySkipped = noLink && buyLines.every((l) => l.stock || !l.entered);
   const roomBuy = buyLines.find((l) => l.kind === 'room');
   const setBuyCost = (key: string, cost: number | null) => setBuyCosts((prev) => ({ ...prev, [key]: cost }));
   // charges table: border between the Hotel and Guest column groups, and the small 2nd header row
   // colour per group: Hotel = violet, Guest = green (header, then a light tint down the cells)
   const { G, SUB, HH, GH, HC, GC } = HG;
-  // Hotel cells of a voucher / extra row: cost per unit + complimentary (₱0) tick
-  const hotelCells = (line?: BuyLine) => (
+  // Hotel cells of a voucher / extra row: Source (buy now / from stock / complimentary) + cost per unit
+  const hotelCells = (line?: BuyLine & { stock: boolean; left: number; stockQty: number }) => (
     <>
       <td className={`${HC} c ${G}`}>
         {useBuy && line && (
-          <input
-            type="checkbox"
-            checked={line.free}
-            onChange={() => setBuyCost(line.key, line.free ? null : 0)}
-            title={en ? 'Complimentary from the hotel — ₱0 to Jupiter' : '호텔 무료 제공 — 주피터 ₱0'}
-            className="w-4 h-4 accent-[#2e7a57] cursor-pointer align-middle"
+          <SourceSelect
+            en={en}
+            value={line.stock ? 'stock' : line.free ? 'free' : 'buy'}
+            onPick={(to) => {
+              setVoucherSource((prev) => ({ ...prev, [line.key]: to === 'stock' ? 'stock' : 'buy' }));
+              if (to === 'free') setBuyCost(line.key, 0);
+              else if (to === 'buy' && line.free) setBuyCost(line.key, null);
+            }}
           />
         )}
       </td>
       <td className={`${HC} c`}>
-        {useBuy && line ? <HotelCostInput en={en} line={line} onCost={setBuyCost} warn={buyTried} /> : <span className="text-faint">—</span>}
+        {useBuy && line ? (
+          line.stock ? <StockBadge en={en} qty={line.qty} left={line.left} /> : <HotelCostInput en={en} line={line} onCost={setBuyCost} warn={buyTried} />
+        ) : (
+          <span className="text-faint">—</span>
+        )}
       </td>
     </>
   );
   // editing: the booking's extras (kept in billing) grouped per voucher kind, so each gets its hotel cost
   const editExtras = useMemo(() => {
     if (!editingReservation) return [];
-    const m = new Map<string, { key: string; label: string; qty: number; amount: number; line?: BuyLine }>();
+    const m = new Map<string, { key: string; label: string; qty: number; amount: number; line?: BuyLine & { stock: boolean; left: number; stockQty: number } }>();
     for (const c of editingReservation.charges || []) {
       const v = chargeStockItem(c);
       const key = v ? stockKey('voucher', v) : 'other';
@@ -338,9 +395,9 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
   const syncLinkedPurchase = (res: Reservation) => {
     if (!setPurchases) return;
     const id = linkedPurchaseId(res.id);
-    const items = buyLines.flatMap((l) =>
+    const items = buyLines.filter((l) => !l.stock).flatMap((l) =>
       [
-        { id: uid(), kind: l.kind, item: l.item, qty: l.qty - l.compQty, unitCost: l.unitCost },
+        { id: uid(), kind: l.kind, item: l.item, qty: l.qty - l.compQty - l.stockQty, unitCost: l.unitCost },
         { id: uid(), kind: l.kind, item: l.item, qty: l.compQty, unitCost: 0 },
       ].filter((i) => i.qty > 0)
     );
@@ -1095,7 +1152,15 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                             </td>
                             {useBuy && (
                               <td className={`${HC} c num ${G}`}>
-                                {!roomBuy ? '—' : hotelComp ? <span className="text-ok text-[11.5px]">{en ? 'Complimentary' : '무료'}</span> : peso(roomBuy.unitCost)}
+                                {!roomBuy ? (
+                                  '—'
+                                ) : roomStock.includes(n.date) ? (
+                                  <span className="text-info text-[11.5px]">{en ? 'From stock' : '재고 사용'}</span>
+                                ) : hotelComp ? (
+                                  <span className="text-ok text-[11.5px]">{en ? 'Complimentary' : '무료'}</span>
+                                ) : (
+                                  peso(roomBuy.unitCost)
+                                )}
                               </td>
                             )}
                             <td className={`${GC} c num ${G}`}>
@@ -1130,7 +1195,15 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                             </td>
                             {useBuy && (
                               <td className={`${HC} c num ${G}`}>
-                                {!line ? <span className="text-faint">—</span> : line.free ? <span className="text-ok text-[11.5px]">{en ? 'Complimentary' : '무료'}</span> : peso(c.qty * line.unitCost)}
+                                {!line ? (
+                                  <span className="text-faint">—</span>
+                                ) : line.stock ? (
+                                  <span className="text-info text-[11.5px]">{en ? 'From stock' : '재고 사용'}</span>
+                                ) : line.free ? (
+                                  <span className="text-ok text-[11.5px]">{en ? 'Complimentary' : '무료'}</span>
+                                ) : (
+                                  peso(c.qty * line.unitCost)
+                                )}
                               </td>
                             )}
                             <td className={`${GC} c num ${G}`}>
@@ -1300,8 +1373,11 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                       </th>
                     </tr>
                     <tr>
-                      <th className={`${HC} !static c w-[108px] ${SUB} ${G}`} title={en ? 'Complimentary from the hotel — ₱0 to Jupiter' : '호텔 무료 제공 — 주피터 ₱0'}>
-                        {en ? 'Complimentary' : '무료'}
+                      <th
+                        className={`${HC} !static c w-[128px] ${SUB} ${G}`}
+                        title={en ? 'Each night / voucher: Buy now (with this booking) · From stock (bought earlier) · Complimentary (₱0 from the hotel)' : '박·바우처별: 지금 구매 / 재고 사용 / 호텔 무료'}
+                      >
+                        {en ? 'Source' : '출처'}
                       </th>
                       <th className={`${HC} !static c w-[128px] ${SUB}`}>{en ? 'Cost' : '원가'}</th>
                       <th className={`${GC} !static c w-[108px] ${SUB} ${G}`} title={en ? 'Complimentary for the guest — ₱0' : '손님 무료 — ₱0'}>
@@ -1359,19 +1435,27 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                           {/* hotel */}
                           <td className={`${HC} c ${G}`}>
                             {useBuy && roomBuy && (
-                              <input
-                                type="checkbox"
-                                checked={hotelComp}
-                                disabled={roomBuy.free && roomBuy.compQty < roomBuy.qty /* cost typed ₱0 = every night free */}
-                                onChange={() => toggleHotelComp(n.date)}
-                                title={en ? 'Complimentary from the hotel — ₱0 to Jupiter' : '호텔 무료 제공 — 주피터 ₱0'}
-                                className="w-4 h-4 accent-[#2e7a57] cursor-pointer align-middle"
-                              />
+                              <SourceSelect en={en} value={roomStock.includes(n.date) ? 'stock' : hotelComp ? 'free' : 'buy'} onPick={(to) => pickNight(n.date, to)} />
                             )}
                           </td>
                           {i === 0 && (
                             <td rowSpan={nightly.length} className={`${HC} c`}>
-                              {useBuy && roomBuy ? <HotelCostInput en={en} line={roomBuy} onCost={setBuyCost} warn={buyTried} /> : <span className="text-faint">—</span>}
+                              {useBuy && roomBuy ? (
+                                roomBuy.stockQty >= roomBuy.qty ? (
+                                  <StockBadge en={en} qty={roomBuy.stockQty} left={roomBuy.left} />
+                                ) : (
+                                  <>
+                                    <HotelCostInput en={en} line={{ ...roomBuy, qty: roomBuy.qty - roomBuy.stockQty }} onCost={setBuyCost} warn={buyTried} />
+                                    {roomBuy.stockQty > 0 && (
+                                      <div className={`text-[10.5px] mt-1 ${roomBuy.left >= roomBuy.stockQty ? 'text-muted' : 'text-warn'}`}>
+                                        {en ? `+ ${roomBuy.stockQty} from stock · ${Math.max(roomBuy.left, 0)} left` : `+ 재고 ${roomBuy.stockQty} · 남은 ${Math.max(roomBuy.left, 0)}`}
+                                      </div>
+                                    )}
+                                  </>
+                                )
+                              ) : (
+                                <span className="text-faint">—</span>
+                              )}
                             </td>
                           )}
                           {/* guest */}
@@ -1484,7 +1568,20 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                         </div>
                       </td>
                       <td className={`${HC} ${G}`} />
-                      <td className={`${HC} c num`}>{useBuy ? peso(buyCost) : <span className="text-faint">—</span>}</td>
+                      <td className={`${HC} c num`}>
+                        {useBuy ? (
+                          <>
+                            {peso(buyCost)}
+                            {fromStock > 0 && (
+                              <div className="text-[10.5px] font-normal text-muted">
+                                + {fromStock} {en ? 'from stock' : '재고 사용'}
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <span className="text-faint">—</span>
+                        )}
+                      </td>
                       <td className={`${GC} ${G}`} />
                       <td className={`${GC} c num`}>{peso(guestTotal)}</td>
                     </tr>

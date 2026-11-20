@@ -7,7 +7,7 @@ import { ChargeAmountText, FreeCheck } from './StayBreakdown';
 import { ComboInput, Select, toast } from './ui';
 import { StockWarning, useStockLeft } from './StockContext';
 import { DateFilter } from './DateFilter';
-import { BuyLine, HG, HotelCostInput, linkedPurchaseId } from './HotelCostSection';
+import { BuyLine, HG, HotelCostInput, linkedPurchaseId, SourceSelect, StockBadge, VoucherSource } from './HotelCostSection';
 
 /**
  * Voucher-only purchase (no room booking): guest, date, voucher items (hotel cost | guest price), paid now / bill later.
@@ -54,7 +54,7 @@ export const VoucherSaleForm: React.FC<{
   // 'stock' = taken from vouchers bought earlier (Hotel Purchases) — no new purchase, no cost to type.
   // Editing: a kind that is not in its own purchase came from stock. New line: stock when enough is left.
   const stockLeft = useStockLeft(en, initial ? { voucherSaleId: initial.id } : undefined);
-  const [source, setSource] = useState<Record<string, 'buy' | 'stock'>>(() => {
+  const [source, setSource] = useState<Record<string, VoucherSource>>(() => {
     if (!initial) return {};
     const own = new Set((linked?.items || []).map((i) => stockKey(i.kind, i.item)));
     return Object.fromEntries(
@@ -228,33 +228,21 @@ export const VoucherSaleForm: React.FC<{
                     {/* hotel */}
                     <td className={`${HC} c ${G}`}>
                       {useBuy && line && (
-                        <Select
+                        <SourceSelect
+                          en={en}
                           value={line.stock ? 'stock' : line.free ? 'free' : 'buy'}
-                          onChange={(e) => {
-                            const to = e.target.value;
+                          onPick={(to) => {
                             setSource((prev) => ({ ...prev, [line.key]: to === 'stock' ? 'stock' : 'buy' }));
                             if (to === 'free') setBuyCost(line.key, 0);
                             else if (to === 'buy' && line.free) setBuyCost(line.key, null);
                           }}
-                          className="input input-sm w-[116px] mx-auto text-[12px]"
-                        >
-                          <option value="buy">{en ? 'Buy now' : '지금 구매'}</option>
-                          <option value="stock">{en ? 'From stock' : '재고 사용'}</option>
-                          <option value="free">{en ? 'Complimentary' : '호텔 무료'}</option>
-                        </Select>
+                        />
                       )}
                     </td>
                     <td className={`${HC} c`}>
                       {useBuy && line ? (
                         line.stock ? (
-                          <span
-                            className={`badge ${line.left >= line.qty ? 'badge-info' : 'badge-warn'} w-[108px] mx-auto justify-center h-7 num`}
-                            title={en ? 'Taken from vouchers already bought from the hotel (Hotel Purchases) — no new cost' : '이미 구매한 바우처 사용 — 추가 원가 없음'}
-                          >
-                            {line.left >= line.qty
-                              ? en ? `${line.left} in stock` : `재고 ${line.left}`
-                              : en ? `Only ${Math.max(line.left, 0)} left` : `재고 ${Math.max(line.left, 0)}뿐`}
-                          </span>
+                          <StockBadge en={en} qty={line.qty} left={line.left} />
                         ) : (
                           <HotelCostInput en={en} line={line} onCost={setBuyCost} warn={buyTried} />
                         )

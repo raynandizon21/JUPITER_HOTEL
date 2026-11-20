@@ -1,4 +1,5 @@
 import React from 'react';
+import { Select } from './ui';
 
 /** One line of what Jupiter buys from the hotel for a booking (room-nights or vouchers). */
 export interface BuyLine {
@@ -63,6 +64,30 @@ export const HotelCostInput: React.FC<{
       />
     </div>
   );
+
+/** Where a voucher comes from (Hotel column): bought now, taken from stock bought earlier, or free from the hotel. */
+export type VoucherSource = 'buy' | 'stock';
+
+export type SourcePick = 'buy' | 'stock' | 'free';
+
+/** Hotel Source dropdown of a voucher kind or a room night: Buy now / From stock / Complimentary. */
+export const SourceSelect: React.FC<{ en: boolean; value: SourcePick; onPick: (to: SourcePick) => void }> = ({ en, value, onPick }) => (
+  <Select value={value} onChange={(e) => onPick(e.target.value as SourcePick)} className="input input-sm w-[116px] mx-auto text-[12px]">
+    <option value="buy">{en ? 'Buy now' : '지금 구매'}</option>
+    <option value="stock">{en ? 'From stock' : '재고 사용'}</option>
+    <option value="free">{en ? 'Complimentary' : '호텔 무료'}</option>
+  </Select>
+);
+
+/** Cost cell of a voucher taken from stock: how many are left (amber when not enough). */
+export const StockBadge: React.FC<{ en: boolean; qty: number; left: number }> = ({ en, qty, left }) => (
+  <span
+    className={`badge ${left >= qty ? 'badge-info' : 'badge-warn'} w-[108px] mx-auto justify-center h-7 num`}
+    title={en ? 'Taken from vouchers already bought from the hotel (Hotel Purchases) — no new cost' : '이미 구매한 바우처 사용 — 추가 원가 없음'}
+  >
+    {left >= qty ? (en ? `${left} in stock` : `재고 ${left}`) : en ? `Only ${Math.max(left, 0)} left` : `재고 ${Math.max(left, 0)}뿐`}
+  </span>
+);
 
 /** Hotel | Guest column groups of the booking / voucher forms (border, 2nd header row, colours). */
 export const HG = {

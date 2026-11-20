@@ -103,8 +103,10 @@ export function hotelNights(r: Reservation, purchases: HotelPurchase[]): Map<str
   const rooms = (p?.items || []).filter((i) => i.kind === 'room');
   if (!rooms.length) return m;
   const comp = rooms.filter((i) => !i.unitCost).reduce((a, i) => a + i.qty, 0);
+  const paid = rooms.filter((i) => i.unitCost > 0).reduce((a, i) => a + i.qty, 0);
   const cost = rooms.find((i) => i.unitCost > 0)?.unitCost ?? 0;
-  getStayNights(r.checkIn, r.checkOut).forEach((d, i) => m.set(d, i < comp ? 0 : cost));
+  // order: complimentary nights, bought nights, then nights from room stock (bought earlier — no cost here)
+  getStayNights(r.checkIn, r.checkOut).forEach((d, i) => i < comp + paid && m.set(d, i < comp ? 0 : cost));
   return m;
 }
 

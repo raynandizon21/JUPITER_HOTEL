@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { FileSpreadsheet, Receipt, CalendarDays, BedDouble, Ticket } from 'lucide-react';
+import { FileSpreadsheet, Receipt, CalendarDays, BedDouble, Ticket, ChevronLeft, ChevronRight } from 'lucide-react';
 import { CasinoRatesConfig, FolioCharge, HotelPurchase, Reservation, VoucherSale } from '../types/hotel';
 import { usePurchases } from './StockContext';
 import { chargeAmount, folioOf, peso, voucherTotals } from '../utils/billing';
@@ -43,6 +43,9 @@ export interface DailyRow {
   unpaidAmount: number; // 미결제 금액
   vouchers: number; // voucher-only purchases that day (건) — for the record, not in the totals above
   voucherAmount: number; // their total (PHP)
+  extrasQty: number; // pieces of buffet / vouchers / extras charged on this day (with a booking)
+  extrasList: string; // breakdown for the tooltip, e.g. "Breakfast voucher × 3"
+  voucherQty: number; // pieces of the voucher-only purchases that day
 }
 
 export type DayShare = { total: number; paid: number; room: number; extras: number };
@@ -106,6 +109,13 @@ export function hotelNights(r: Reservation, purchases: HotelPurchase[]): Map<str
   return m;
 }
 
+/** "Breakfast voucher × 3" one per line (tooltip) — same descriptions added up */
+function pieces(list: FolioCharge[]): string {
+  const m = new Map<string, number>();
+  list.forEach((c) => m.set(c.description, (m.get(c.description) || 0) + c.qty));
+  return [...m].map(([d, q]) => `${d} × ${q}`).join('\n');
+}
+
 /** Hotel cost of one voucher line, from the purchase saved with its booking / voucher sale (null = no cost entered). */
 export function voucherHotelCost(c: FolioCharge, buyId: string, purchases: HotelPurchase[]): number | null {
   const v = chargeStockItem(c);
@@ -140,6 +150,7 @@ export function buildDailyRowsFor(reservations: Reservation[], dates: string[], 
     const hotelAmount = hotel.reduce((a, h) => a + (h.get(date) || 0), 0);
     const hotelNightsN = hotel.filter((h) => h.has(date)).length;
     const voucherAmount = sold.reduce((a, v) => a + voucherTotals(v).total, 0);
+    const dayCharges = reservations.flatMap((r) => (r.charges || []).filter((c) => c.date === date));
     // vouchers of this day: with a booking (charge date) and vouchers-only (purchase date)
     const bookingVouchers = reservations.flatMap((r) => (r.charges || []).filter((c) => c.date === date && chargeStockItem(c)).map((c) => ({ c, buyId: `buy-${r.id}` })));
     const vCosts = [...bookingVouchers, ...sold.flatMap((v) => v.items.map((c) => ({ c, buyId: `buy-${v.id}` })))].map((x) => voucherHotelCost(x.c, x.buyId, purchases)).filter((x): x is number => x !== null);
@@ -163,6 +174,9 @@ export function buildDailyRowsFor(reservations: Reservation[], dates: string[], 
       unpaidAmount: shares ? dayTotal - dayPaid : folios.reduce((a, f) => a + Math.max(f.balance, 0), 0),
       vouchers: sold.length,
       voucherAmount,
+      extrasQty: dayCharges.reduce((a, c) => a + c.qty, 0),
+      extrasList: pieces(dayCharges),
+      voucherQty: sold.reduce((a, v) => a + v.items.reduce((b, c) => b + c.qty, 0), 0),
     };
   });
 }
@@ -198,7 +212,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [view, setView] = useState<'all' | 'paid' | 'unpaid'>('all');
   const [dayPage, setDayPage] = useState(0);
-  const [dayTab, setDayTab] = useState<'in' | 'stay' | 'buffet'>('in');
+  const [dayTab, setDayTab] = useState<'in' | 'stay' | 'buffet' | 'sold'>('in');
   // guests per page in the day pop-up: as many as fit the window (rows ≈ 50px, the rest is header/summary/pager)
   const [winH, setWinH] = useState(() => window.innerHeight);
   useEffect(() => {
@@ -211,7 +225,11 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
     setDayPage(0);
     setView(v);
     setSelectedDate(date);
-    setDayTab(reservations.some((r) => r.checkIn === date) ? 'in' : reservations.some((r) => r.checkIn < date && date < r.checkOut) ? 'stay' : 'buffet');
+    setDayTab(reservations.some((r) => r.checkIn === date) ? 'in' : reservations.some((r) => r.checkIn < date && date < r.checkOut)
+          ? 'stay'
+          : reservations.some((r) => (r.charges || []).some((c) => c.date === date))
+            ? 'buffet'
+            : 'sold');
   };
   const [folioId, setFolioId] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -226,7 +244,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
     const sum = (k: keyof DailyRow) => rows.reduce((a, r) => a + (r[k] as number), 0);
     // guests in the period = arrivals + those already in the room on its first day (each counted once)
     const guests = sum('checkIns') + (rows[0] ? rows[0].inHouse - rows[0].checkIns : 0);
-    return { checkIns: sum('checkIns'), guests, nights: sum('nights'), total: sum('total'), roomAmount: sum('roomAmount'), hotelAmount: sum('hotelAmount'), hotelAll: sum('hotelAll'), junketAll: sum('junketAll'), extrasAmount: sum('extrasAmount'), voucherAmount: sum('voucherAmount'), paid: sum('paid'), paidAmount: sum('paidAmount'), unpaid: sum('unpaid'), unpaidAmount: sum('unpaidAmount') };
+    return { checkIns: sum('checkIns'), guests, nights: sum('nights'), total: sum('total'), roomAmount: sum('roomAmount'), hotelAmount: sum('hotelAmount'), extrasQty: sum('extrasQty'), voucherQty: sum('voucherQty'), hotelAll: sum('hotelAll'), junketAll: sum('junketAll'), extrasAmount: sum('extrasAmount'), voucherAmount: sum('voucherAmount'), paid: sum('paid'), paidAmount: sum('paidAmount'), unpaid: sum('unpaid'), unpaidAmount: sum('unpaidAmount') };
   }, [rows]);
 
   // "주피터고객이 사용중인객실" — rooms in use today (or on the 1st day of a past/future month)
@@ -323,7 +341,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
             <thead>
               <tr>
                 <H ko="날짜" enLabel="Date" align="l" />
-                <H tone="info" ko="체크인 목록" enLabel="Check-in list" tip={en ? 'Guests who arrived on this day' : '이날 도착한 손님 수'} />
+                <H tone="info" ko="객실 (체크인 목록)" enLabel="Rooms (check-in list)" tip={en ? 'Rooms used that night: guests who arrived + guests still staying (1 booking = 1 room)' : '이날 밤 사용 객실: 도착 + 계속 투숙 (예약 1건 = 객실 1개)'} />
                 <H tone="info" ko="뷔페·추가" enLabel="Buffet / extras" align="r" tip={en ? 'Vouchers, extra bed and other charges on this day (with a room booking)' : '이날 바우처·엑스트라 베드 등 추가 요금 (객실 예약 포함)'} />
                 <H
                   tone="info"
@@ -363,8 +381,8 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                 return (
                   <tr
                     key={r.date}
-                    onClick={() => (has || staying > 0 || r.total > 0) && open(r.date, 'all')}
-                    className={`${has || staying > 0 ? 'cursor-pointer' : ''} ${isToday ? '!bg-accent-line' : ''}`}
+                    onClick={() => (has || staying > 0 || r.total > 0 || r.vouchers > 0) && open(r.date, 'all')}
+                    className={`${has || staying > 0 || r.vouchers > 0 ? 'cursor-pointer' : ''} ${isToday ? '!bg-accent-line' : ''}`}
                   >
                     <td className={`whitespace-nowrap ${isToday ? 'shadow-[inset_3px_0_0_var(--color-accent)]' : ''}`} title={isToday ? (en ? 'Today' : '오늘') : undefined}>
                       <span className={`num ${isToday ? 'font-bold text-accent-strong' : has ? 'font-medium text-ink' : 'font-medium text-ink-2'}`} title={formatLongDate(r.date)}>{formatShortDate(r.date)}</span>
@@ -385,7 +403,16 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                         z(0, '건')
                       )}
                     </td>
-                    <td className="r num bg-accent-soft/30 whitespace-nowrap">{r.extrasAmount ? peso(r.extrasAmount) : <span className="text-faint">—</span>}</td>
+                    <td className="r num bg-accent-soft/30 whitespace-nowrap" title={r.extrasList || undefined}>
+                      {r.extrasAmount || r.extrasQty ? (
+                        <>
+                          <span className="text-[11px] text-muted mr-1.5">{en ? `${r.extrasQty} ${r.extrasQty === 1 ? 'pc' : 'pcs'}` : `${r.extrasQty}개`}</span>
+                          {peso(r.extrasAmount)}
+                        </>
+                      ) : (
+                        <span className="text-faint">—</span>
+                      )}
+                    </td>
                     <td className="r num bg-accent-soft/30 whitespace-nowrap">
                       {r.total > 0 ? (
                         <button
@@ -427,7 +454,14 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                           : undefined
                       }
                     >
-                      {r.vouchers ? <span className="num font-semibold text-warn">{peso(r.voucherAmount)}</span> : <span className="text-faint">—</span>}
+                      {r.vouchers ? (
+                        <>
+                          <span className="text-[11px] text-muted mr-1.5">{en ? `${r.voucherQty} ${r.voucherQty === 1 ? 'pc' : 'pcs'}` : `${r.voucherQty}개`}</span>
+                          <span className="num font-semibold text-warn">{peso(r.voucherAmount)}</span>
+                        </>
+                      ) : (
+                        <span className="text-faint">—</span>
+                      )}
                     </td>
                   </tr>
                 );
@@ -443,13 +477,19 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                 <td className="c num" title={en ? 'Guests in the room during this period (each counted once)' : '기간 중 투숙 손님 수 (중복 제외)'}>
                   {t.guests || '—'}
                 </td>
-                <td className="r num">{peso(t.extrasAmount)}</td>
+                <td className="r num whitespace-nowrap">
+                  {t.extrasQty > 0 && <span className="text-[11px] text-muted mr-1.5 font-normal">{en ? `${t.extrasQty} ${t.extrasQty === 1 ? 'pc' : 'pcs'}` : `${t.extrasQty}개`}</span>}
+                  {peso(t.extrasAmount)}
+                </td>
                 <td className="r num text-ink">{peso(t.total)}</td>
                 <td className="r num text-ok">{peso(t.paidAmount)}</td>
                 <td className="r num text-bad">{peso(t.unpaidAmount)}</td>
                 <td className="r num text-violet">{peso(t.hotelAll)}</td>
                 <td className="r num">{peso(t.junketAll)}</td>
-                <td className="r num text-warn">{t.voucherAmount ? peso(t.voucherAmount) : '—'}</td>
+                <td className="r num whitespace-nowrap text-warn">
+                  {t.voucherQty > 0 && <span className="text-[11px] text-muted mr-1.5 font-normal">{en ? `${t.voucherQty} ${t.voucherQty === 1 ? 'pc' : 'pcs'}` : `${t.voucherQty}개`}</span>}
+                  {t.voucherAmount ? peso(t.voucherAmount) : '—'}
+                </td>
               </tr>
             </tfoot>
           </table>
@@ -468,20 +508,23 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
         // buffet / vouchers / extras on this date: from room bookings (charges) and voucher-only purchases
         const buffet = [
           ...reservations.flatMap((r) =>
-            (r.charges || []).filter((c) => c.date === selectedDate).map((c) => ({ key: `r-${r.id}-${c.id}`, guest: r.guestName, src: 'room' as const, c, resId: r.id, buyId: `buy-${r.id}` }))
+            (r.charges || []).filter((c) => c.date === selectedDate).map((c) => ({ key: `r-${r.id}-${c.id}`, guest: r.guestName, agent: r.agentName, src: 'room' as const, c, resId: r.id, buyId: `buy-${r.id}` }))
           ),
-          ...voucherSales.filter((v) => v.date === selectedDate).flatMap((v) => v.items.map((c) => ({ key: `v-${v.id}-${c.id}`, guest: v.guestName, src: 'voucher' as const, c, resId: '', buyId: `buy-${v.id}` }))),
+          ...voucherSales.filter((v) => v.date === selectedDate).flatMap((v) => v.items.map((c) => ({ key: `v-${v.id}-${c.id}`, guest: v.guestName, agent: v.agentName, src: 'voucher' as const, c, resId: '', buyId: `buy-${v.id}` }))),
         ];
-        const buffetTotal = buffet.reduce((a, x) => a + chargeAmount(x.c), 0);
+        // two tabs = the table's two columns: Buffet / extras (with a booking) and Vouchers sold (vouchers only)
+        const extras = buffet.filter((x) => x.src === 'room');
+        const sold = buffet.filter((x) => x.src === 'voucher');
+        const items = dayTab === 'sold' ? sold : extras;
         // hotel cost of a buffet / voucher line (null = not bought through a booking / voucher form)
         const buffetCost = (x: (typeof buffet)[number]) => voucherHotelCost(x.c, x.buyId, purchases);
-        const buffetCosts = buffet.map(buffetCost);
-        const buffetHotel = buffetCosts.reduce<number>((a, c) => a + (c || 0), 0);
+        const itemsTotal = { qty: items.reduce((a, x) => a + x.c.qty, 0), amount: items.reduce((a, x) => a + chargeAmount(x.c), 0), hotel: items.reduce((a, x) => a + (buffetCost(x) || 0), 0) };
+        const isItems = dayTab === 'buffet' || dayTab === 'sold';
         const z = <span className="text-faint">—</span>;
         const comp = <span className="text-ok">{en ? 'Complimentary' : '무료'}</span>;
 
         const guestRows = dayTab === 'in' ? detail : staying;
-        const pages = Math.max(1, Math.ceil((dayTab === 'buffet' ? buffet.length : guestRows.length) / PAGE));
+        const pages = Math.max(1, Math.ceil((isItems ? items.length : guestRows.length) / PAGE));
         const cur = Math.min(dayPage, pages - 1);
 
         const shareOf = (res: Reservation) => dayShares.get(res.id)?.get(selectedDate) || { total: 0, paid: 0, room: 0, extras: 0 };
@@ -495,7 +538,10 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
               <td>
                 <span className="inline-flex items-center gap-2 font-medium text-accent">
                   <BedDouble className="w-4 h-4 shrink-0" />
-                  <span className="text-ink">{res.guestName}</span>
+                  <span className="text-ink">
+                    {res.agentName && <span className="text-ink-2">{res.agentName} - </span>}
+                    {res.guestName}
+                  </span>
                 </span>
                 <div className="text-[11px] text-muted pl-6">{res.roomType}</div>
               </td>
@@ -529,33 +575,74 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
         const tabs = [
           { key: 'in' as const, label: en ? 'Checked in' : '체크인', n: detail.length, on: 'bg-ok-soft text-ok', bar: 'bg-ok', pill: 'bg-ok text-white' },
           { key: 'stay' as const, label: en ? 'Still staying' : '계속 투숙', n: staying.length, on: 'bg-info-soft text-info', bar: 'bg-info', pill: 'bg-info text-white' },
-          { key: 'buffet' as const, label: en ? 'Buffet & vouchers' : '뷔페·바우처', n: buffet.length, on: 'bg-warn-soft text-warn', bar: 'bg-warn', pill: 'bg-warn text-white' },
+          { key: 'buffet' as const, label: en ? 'Buffet / extras' : '뷔페·추가', n: extras.reduce((a, x) => a + x.c.qty, 0), on: 'bg-accent-soft text-accent', bar: 'bg-accent', pill: 'bg-accent text-white' },
+          { key: 'sold' as const, label: en ? 'Vouchers sold' : '바우처 판매', n: sold.reduce((a, x) => a + x.c.qty, 0), on: 'bg-warn-soft text-warn', bar: 'bg-warn', pill: 'bg-warn text-white' },
         ];
 
         return (
-          <Dialog width="max-w-5xl" onClose={() => setSelectedDate(null)} title={<>{en ? 'Guests · ' : '손님 · '}{formatLongDate(selectedDate)}</>}>
-            {/* value of the day — same order as the table columns */}
-            <div className="px-6 pt-4 grid grid-cols-6 gap-2">
-              {(
-                [
-                  [en ? 'Buffet / extras' : '뷔페·추가', peso(dayRow?.extrasAmount || 0), 'text-ink-2'],
-                  [en ? 'Total amount' : '총 금액', peso(dayRow?.total || 0), 'text-ink'],
-                  [en ? 'Paid' : '결제', peso(dayRow?.paidAmount || 0), 'text-ok'],
-                  [en ? 'Unpaid' : '미결제', peso(dayRow?.unpaidAmount || 0), dayRow?.unpaidAmount ? 'text-bad' : 'text-muted'],
-                  [
-                    en ? 'Hotel rate' : '호텔 요금',
-                    !dayRow?.hotelNights ? '—' : dayRow.hotelAmount ? peso(dayRow.hotelAmount) : en ? 'Complimentary' : '무료',
-                    dayRow?.hotelNights && !dayRow.hotelAmount ? 'text-ok' : 'text-violet',
-                  ],
-                  [en ? 'Junket rate' : '정킷 요금', peso(dayRow?.roomAmount || 0), 'text-ink-2'],
-                ] as const
-              ).map(([label, value, tone], i) => (
-                <div key={label} className={`rounded-lg border px-3 py-2 ${i === 1 ? 'border-ink/15 bg-surface' : 'border-line bg-sunken'}`}>
-                  <div className="text-[10.5px] font-medium uppercase tracking-wide text-muted">{label}</div>
-                  <div className={`num mt-0.5 font-semibold leading-tight ${i === 1 ? 'text-[17px]' : 'text-[14px]'} ${tone}`}>{value}</div>
+          <Dialog
+            width="max-w-5xl"
+            onClose={() => setSelectedDate(null)}
+            title={(() => {
+              const i = dates.indexOf(selectedDate);
+              const prev = i > 0 ? dates[i - 1] : null;
+              const next = i >= 0 && i < dates.length - 1 ? dates[i + 1] : null;
+              const Nav = ({ to, children }: { to: string | null; children: React.ReactNode }) => (
+                <button
+                  disabled={!to}
+                  onClick={() => to && open(to, view)}
+                  className="icon-btn !w-7 !h-7 disabled:opacity-30 disabled:cursor-default"
+                  title={to ? formatLongDate(to) : undefined}
+                >
+                  {children}
+                </button>
+              );
+              return (
+                <span className="inline-flex items-center gap-2">
+                  <Nav to={prev}>
+                    <ChevronLeft className="w-4 h-4" />
+                  </Nav>
+                  <span>
+                    {en ? 'Guests · ' : '손님 · '}
+                    {new Date(selectedDate + 'T00:00:00Z').toLocaleDateString(en ? 'en-US' : 'ko-KR', { weekday: 'long', timeZone: 'UTC' })}, {formatLongDate(selectedDate)}
+                  </span>
+                  <Nav to={next}>
+                    <ChevronRight className="w-4 h-4" />
+                  </Nav>
+                </span>
+              );
+            })()}
+          >
+            {/* what Jupiter made that day: Sales − Bill to hotel = Profit */}
+            {(() => {
+              const d = dayRow;
+              const sales = d?.junketAll || 0;
+              const bill = d?.hotelAll || 0;
+              const profit = sales - bill;
+              const known = !!d?.hotelAllKnown;
+              const pct = sales ? Math.round((profit / sales) * 100) : 0;
+              const cards = [
+                { label: en ? 'Sales' : '매출', value: peso(sales), tone: 'text-ink', sub: en ? 'junket rate' : '정킷 요금' },
+                { label: en ? 'Bill to hotel' : '호텔 청구', value: known ? peso(bill) : '—', tone: 'text-violet', sub: en ? 'hotel rate' : '호텔 요금' },
+                {
+                  label: en ? 'Profit' : '이익',
+                  value: known ? `${profit < 0 ? '−' : ''}${peso(Math.abs(profit))}` : '—',
+                  tone: profit < 0 ? 'text-bad' : 'text-ok',
+                  sub: known ? (sales ? `${pct}% ${en ? 'of sales' : '매출 대비'}` : '') : en ? 'no hotel cost entered' : '호텔 원가 미입력',
+                },
+              ];
+              return (
+                <div className="px-6 pt-4 grid grid-cols-3 gap-3">
+                  {cards.map((c) => (
+                    <div key={c.label} className="rounded-lg border border-line bg-sunken px-4 py-2.5 min-w-0">
+                      <div className="text-[11px] font-semibold uppercase tracking-wider text-muted">{c.label}</div>
+                      <div className={`num text-[18px] font-bold leading-tight mt-0.5 ${c.tone}`}>{c.value}</div>
+                      <div className="text-[10.5px] text-muted truncate">{c.sub}</div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              );
+            })()}
 
             {/* tabs */}
             <div className="px-6 mt-3 flex items-center gap-1 border-b border-line">
@@ -581,7 +668,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
             </div>
 
             <div className="px-6 py-4">
-              {dayTab !== 'buffet' ? (
+              {!isItems ? (
                 <table className="dtable compact whitespace-nowrap">
                   <thead>
                     <tr>
@@ -629,77 +716,86 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                     })()}
                 </table>
               ) : (
-                <table className="dtable compact whitespace-nowrap">
-                  <thead>
-                    <tr>
-                      <th className="!bg-sunken">{en ? 'Guest' : '손님'}</th>
-                      <th className="!bg-warn-soft !text-warn">{en ? 'Item' : '항목'}</th>
-                      <th className="c !bg-warn-soft !text-warn">{en ? 'Type' : '구분'}</th>
-                      <th className="c !bg-warn-soft !text-warn">{en ? 'Qty' : '수량'}</th>
-                      <th className="r !bg-warn-soft !text-warn">{en ? 'Unit price' : '단가'}</th>
-                      <th className="r !bg-violet-soft !text-violet">{en ? 'Hotel cost' : '호텔 원가'}</th>
-                      <th className="r !bg-accent-soft !text-accent">{en ? 'Amount' : '금액'}</th>
-                      <th className="c !bg-accent-soft !text-accent">{en ? 'Billing' : '청구서'}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {buffet.length === 0 && (
-                      <tr>
-                        <td colSpan={8} className="!py-8 text-center text-muted">{en ? 'No buffet or vouchers on this day' : '이 날짜 뷔페·바우처 없음'}</td>
-                      </tr>
-                    )}
-                    {buffet.slice(cur * PAGE, cur * PAGE + PAGE).map((x, i) => {
-                      const cost = buffetCosts[cur * PAGE + i];
-                      const isVoucher = !!chargeStockItem(x.c);
-                      return (
-                        <tr key={x.key}>
-                          <td className="font-medium text-ink">{x.guest}</td>
-                          <td>
-                            <span className={`inline-flex items-center gap-2 font-medium ${isVoucher ? 'text-warn' : 'text-muted'}`}>
-                              {isVoucher ? <Ticket className="w-4 h-4" /> : <Receipt className="w-4 h-4" />}
-                              <span className="text-ink">{x.c.description}</span>
-                            </span>
-                          </td>
-                          <td className="c">
-                            <span className={`badge ${x.src === 'room' ? 'badge-info' : 'badge-warn'}`}>
-                              {x.src === 'room' ? (en ? 'Room booking' : '객실 예약') : en ? 'Vouchers only' : '바우처만'}
-                            </span>
-                          </td>
-                          <td className="c num">{x.c.qty}</td>
-                          <td className="r num text-ink-2">{x.c.free ? comp : peso(x.c.unitPrice)}</td>
-                          <td className="r num text-ink-2">{cost === null ? z : cost === 0 ? comp : peso(cost)}</td>
-                          <td className="r num font-semibold text-ink">{peso(chargeAmount(x.c))}</td>
-                          <td className="c">
-                            {x.resId && (
-                              <button onClick={() => setFolioId(x.resId)} className="icon-btn" title={en ? 'Billing' : '청구서'}>
-                                <Receipt className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </td>
+                (() => {
+                  // Buffet / extras = blue (like its table column), Vouchers sold = gold
+                  const hd = dayTab === 'sold' ? '!bg-warn-soft !text-warn' : '!bg-accent-soft !text-accent';
+                  const billing = dayTab === 'buffet';
+                  const cols = billing ? 7 : 6;
+                  return (
+                    <table className="dtable compact whitespace-nowrap">
+                      <thead>
+                        <tr>
+                          <th className="!bg-sunken">{en ? 'Guest' : '손님'}</th>
+                          <th className={hd}>{en ? 'Item' : '항목'}</th>
+                          <th className={`c ${hd}`}>{en ? 'Qty' : '수량'}</th>
+                          <th className={`r ${hd}`}>{en ? 'Unit price' : '단가'}</th>
+                          <th className="r !bg-violet-soft !text-violet">{en ? 'Hotel cost' : '호텔 원가'}</th>
+                          <th className={`r ${hd}`}>{en ? 'Amount' : '금액'}</th>
+                          {billing && <th className="c !bg-accent-soft !text-accent">{en ? 'Billing' : '청구서'}</th>}
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                  {buffet.length > 0 && (
-                    <tfoot>
-                      <tr>
-                        <td colSpan={3}>
-                          {en ? 'Total' : '합계'}{' '}
-                          <span className="text-muted font-normal">
-                            · {buffet.length} {en ? (buffet.length === 1 ? 'item' : 'items') : '건'}
-                          </span>
-                        </td>
-                        <td className="c num">{buffet.reduce((a, x) => a + x.c.qty, 0)}</td>
-                        <td />
-                        <td className="r num">{peso(buffetHotel)}</td>
-                        <td className="r num text-ink">{peso(buffetTotal)}</td>
-                        <td />
-                      </tr>
-                    </tfoot>
-                  )}
-                </table>
+                      </thead>
+                      <tbody>
+                        {items.length === 0 && (
+                          <tr>
+                            <td colSpan={cols} className="!py-8 text-center text-muted">
+                              {dayTab === 'sold' ? (en ? 'No vouchers-only purchases on this day' : '이 날짜 바우처 단독 구매 없음') : en ? 'No buffet or extras on this day' : '이 날짜 뷔페·추가 없음'}
+                            </td>
+                          </tr>
+                        )}
+                        {items.slice(cur * PAGE, cur * PAGE + PAGE).map((x) => {
+                          const cost = buffetCost(x);
+                          const isVoucher = !!chargeStockItem(x.c);
+                          return (
+                            <tr key={x.key}>
+                              <td>
+                                <div className="font-medium text-ink">
+                                  {x.agent && <span className="text-ink-2">{x.agent} - </span>}
+                                  {x.guest}
+                                </div>
+                              </td>
+                              <td>
+                                <span className={`inline-flex items-center gap-2 font-medium ${isVoucher ? 'text-warn' : 'text-muted'}`}>
+                                  {isVoucher ? <Ticket className="w-4 h-4" /> : <Receipt className="w-4 h-4" />}
+                                  <span className="text-ink">{x.c.description}</span>
+                                </span>
+                              </td>
+                              <td className="c num">{x.c.qty}</td>
+                              <td className="r num text-ink-2">{x.c.free ? comp : peso(x.c.unitPrice)}</td>
+                              <td className="r num text-ink-2">{cost === null ? z : cost === 0 ? comp : peso(cost)}</td>
+                              <td className="r num font-semibold text-ink">{peso(chargeAmount(x.c))}</td>
+                              {billing && (
+                                <td className="c">
+                                  <button onClick={() => setFolioId(x.resId)} className="icon-btn" title={en ? 'Billing' : '청구서'}>
+                                    <Receipt className="w-3.5 h-3.5" />
+                                  </button>
+                                </td>
+                              )}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      {items.length > 0 && (
+                        <tfoot>
+                          <tr>
+                            <td colSpan={2}>
+                              {en ? 'Total' : '합계'}{' '}
+                              <span className="text-muted font-normal">
+                                · {items.length} {en ? (items.length === 1 ? 'item' : 'items') : '건'}
+                              </span>
+                            </td>
+                            <td className="c num">{itemsTotal.qty}</td>
+                            <td />
+                            <td className="r num">{peso(itemsTotal.hotel)}</td>
+                            <td className={`r num ${dayTab === 'sold' ? 'text-warn' : 'text-ink'}`}>{peso(itemsTotal.amount)}</td>
+                            {billing && <td />}
+                          </tr>
+                        </tfoot>
+                      )}
+                    </table>
+                  );
+                })()
               )}
-              {pages > 1 && <Pager page={cur} pages={pages} total={dayTab === 'buffet' ? buffet.length : guestRows.length} size={PAGE} onPage={setDayPage} en={en} />}
+              {pages > 1 && <Pager page={cur} pages={pages} total={isItems ? items.length : guestRows.length} size={PAGE} onPage={setDayPage} en={en} />}
             </div>
             <div className="px-6 py-3 border-t border-line bg-sunken flex justify-end">
               <button onClick={() => setSelectedDate(null)} className="btn btn-ghost">

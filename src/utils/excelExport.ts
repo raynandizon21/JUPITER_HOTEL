@@ -335,8 +335,8 @@ export async function exportDailyExcel(
   ws.getCell('F3').numFmt = '0"실"';
   ws.getCell('F3').font = { bold: true };
 
-  const ko = ['날짜', '체크인 목록', '뷔페·추가 (PHP)', '총 금액 (PHP)', '결제 금액 (PHP)', '미결제 금액 (PHP)', '호텔 요금 (PHP)', '정킷 요금 (PHP)', '바우처 판매 (PHP)'];
-  const enH = ['Date', 'Check-in List', 'Buffet / Extras', 'Total Amount', 'Paid Amount', 'Unpaid Amount', 'Hotel Rate', 'Junket Rate', 'Vouchers Sold (for record)'];
+  const ko = ['날짜', '객실 (체크인 목록)', '뷔페·추가 (PHP)', '총 금액 (PHP)', '결제 금액 (PHP)', '미결제 금액 (PHP)', '호텔 요금 (PHP)', '정킷 요금 (PHP)', '바우처 판매 (PHP)'];
+  const enH = ['Date', 'Rooms (Check-in List)', 'Buffet / Extras', 'Total Amount', 'Paid Amount', 'Unpaid Amount', 'Hotel Rate', 'Junket Rate', 'Vouchers Sold (for record)'];
   ws.getRow(5).values = ko;
   ws.getRow(6).values = enH;
   [5, 6].forEach((r) => {

@@ -89,7 +89,7 @@ export const WorkflowPage: React.FC<{
       ],
       then: en ? [['Guest payment → Save', 'Paid in full now or Bill later']] : [['손님 결제 → 저장', '지금 결제 또는 나중에 청구']],
       result: en ? "One Save = guest bill + Hilton purchase (that month's Hilton bill) · margin shown" : '한 번 저장 = 손님 청구 + 힐튼 구매 (그 달 힐튼 청구액) · 마진 표시',
-      tip: en ? 'Bulk buy with no guest yet? Hotel Purchases → New Purchase. Yellow warning = not enough bought; you can still save.' : '손님 없이 대량 구매는 호텔 구매 → 새 구매. 노란 경고 = 구매량 부족, 저장 가능.',
+      tip: en ? 'Edit or delete the booking and its Hilton purchase changes with it.' : '예약을 수정·삭제하면 힐튼 구매도 함께 바뀝니다.',
       to: 'ledger',
       page: en ? 'Guest Ledger' : '예약 관리부',
     },

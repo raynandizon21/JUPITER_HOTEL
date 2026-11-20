@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { FileSpreadsheet, Receipt, CalendarDays, BedDouble, Ticket, ChevronLeft, ChevronRight } from 'lucide-react';
 import { CasinoRatesConfig, FolioCharge, HotelPurchase, Reservation, VoucherSale } from '../types/hotel';
 import { usePurchases } from './StockContext';
@@ -6,7 +6,6 @@ import { chargeAmount, folioOf, peso, voucherTotals } from '../utils/billing';
 import { chargeStockItem } from '../utils/inventory';
 import { addDays, formatLongDate, formatShortDate, formatMonth, getDaysInMonth, getDayCategory, getNightlyRates, getStayNights } from '../utils/hotelHelpers';
 import { Language } from '../i18n/translations';
-import { useFitRows } from '../utils/useFitRows';
 import { PageHeader, Dialog, Pager, toast } from './ui';
 import { GuestFolio } from './GuestFolio';
 import { DateFilter } from './DateFilter';
@@ -254,19 +253,15 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
   const inHouseNow = rows.find((r) => r.date === refDate)?.inHouse ?? 0;
 
   const visible = rows;
-  // table pagination, opening on the page that holds today.
-  // As many normal-height rows as fit the card (no stretched rows, no inner scroll).
-  // rows per page = as many as fit the card; loop-proof (see useFitRows)
-  const [areaRef, fitRows] = useFitRows({ rowSelector: 'tbody tr:not([data-filler])', fallbackRow: 36, initial: 5, deps: [rows] });
-  const TABLE_PAGE = fitRows;
-  const [tablePage, setTablePage] = useState(0);
-  const tablePages = Math.max(1, Math.ceil(visible.length / TABLE_PAGE));
-  useEffect(() => {
-    const i = visible.findIndex((r) => r.date === todayISO);
-    setTablePage(i >= 0 ? Math.floor(i / TABLE_PAGE) : 0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dates, TABLE_PAGE]);
-  const pageRows = visible.slice(tablePage * TABLE_PAGE, tablePage * TABLE_PAGE + TABLE_PAGE);
+  // all days in one table that scrolls; the column header and the grand total stay fixed (sticky).
+  // Opens scrolled to today.
+  const areaRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = areaRef.current;
+    const row = el?.querySelector<HTMLElement>('tr[data-today]');
+    if (!el) return;
+    el.scrollTop = row ? Math.max(0, row.offsetTop - el.clientHeight / 2) : 0;
+  }, [dates]);
   const dayAll = selectedDate ? reservations.filter((r) => r.checkIn === selectedDate) : [];
   const byView = (r: Reservation) => (view === 'all' ? true : view === 'paid' ? folioOf(r).balance <= 0 : folioOf(r).balance > 0);
   const detail = dayAll.filter(byView);
@@ -298,9 +293,9 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
     warn: { th: '!bg-warn-soft', ko: 'text-warn', en: 'text-warn/70' },
     violet: { th: '!bg-violet-soft', ko: 'text-violet', en: 'text-violet/70' },
   } as const;
-  const H: React.FC<{ ko: string; enLabel: string; align?: 'l' | 'c' | 'r'; tip?: string; tone?: keyof typeof HEAD_TONE }> = ({ ko, enLabel, align = 'c', tip, tone = 'none' }) => (
+  const H: React.FC<{ ko: string; enLabel: React.ReactNode; align?: 'l' | 'c' | 'r'; tip?: string; tone?: keyof typeof HEAD_TONE }> = ({ ko, enLabel, align = 'c', tip, tone = 'none' }) => (
     <th className={`${align === 'r' ? 'r' : align === 'c' ? 'c' : ''} !whitespace-normal !px-2 ${HEAD_TONE[tone].th}`} title={tip}>
-      <div className={`normal-case tracking-normal text-[12px] font-semibold ${HEAD_TONE[tone].ko}`}>{ko}</div>
+      <div className={`normal-case tracking-normal text-[12px] font-semibold whitespace-nowrap ${HEAD_TONE[tone].ko}`}>{ko}</div>
       <div className={`text-[10px] mt-0.5 ${HEAD_TONE[tone].en}`}>{enLabel}</div>
     </th>
   );
@@ -329,19 +324,30 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
           </div>
         </div>
 
-        <div ref={areaRef} className="flex-1 relative min-h-[200px] overflow-hidden">
-          <table className="dtable compact absolute inset-0 h-full table-fixed">
-            {/* date column fixed, the 8 number columns share the rest equally */}
+        <div ref={areaRef} className="flex-1 min-h-[200px] overflow-y-auto">
+          <table className="dtable compact table-fixed">
+            {/* date, rooms and the two "amount + pcs" columns get a set width; the 5 money columns share the rest */}
             <colgroup>
-              <col className="w-[200px]" />
-              {Array.from({ length: 8 }, (_, i) => (
-                <col key={i} />
-              ))}
+              <col className="w-[140px]" />
+              <col className="w-[128px]" />
+              <col className="w-[150px]" />
+              <col />
+              <col />
+              <col />
+              <col />
+              <col />
+              <col className="w-[160px]" />
             </colgroup>
             <thead>
               <tr>
                 <H ko="날짜" enLabel="Date" align="l" />
-                <H tone="info" ko="객실 (체크인 목록)" enLabel="Rooms (check-in list)" tip={en ? 'Rooms used that night: guests who arrived + guests still staying (1 booking = 1 room)' : '이날 밤 사용 객실: 도착 + 계속 투숙 (예약 1건 = 객실 1개)'} />
+                <H tone="info" align="r" ko="객실 (체크인 목록)" enLabel={
+                    <>
+                      Rooms
+                      <br />
+                      (check-in list)
+                    </>
+                  } tip={en ? 'Rooms used that night: guests who arrived + guests still staying (1 booking = 1 room)' : '이날 밤 사용 객실: 도착 + 계속 투숙 (예약 1건 = 객실 1개)'} />
                 <H tone="info" ko="뷔페·추가" enLabel="Buffet / extras" align="r" tip={en ? 'Vouchers, extra bed and other charges on this day (with a room booking)' : '이날 바우처·엑스트라 베드 등 추가 요금 (객실 예약 포함)'} />
                 <H
                   tone="info"
@@ -370,7 +376,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
               </tr>
             </thead>
             <tbody>
-              {pageRows.map((r) => {
+              {visible.map((r) => {
                 const has = r.checkIns > 0;
                 // guests who arrived on an earlier day and are still in the room that night
                 const staying = r.inHouse - r.checkIns;
@@ -382,6 +388,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                   <tr
                     key={r.date}
                     onClick={() => (has || staying > 0 || r.total > 0 || r.vouchers > 0) && open(r.date, 'all')}
+                    data-today={isToday || undefined}
                     className={`${has || staying > 0 || r.vouchers > 0 ? 'cursor-pointer' : ''} ${isToday ? '!bg-accent-line' : ''}`}
                   >
                     <td className={`whitespace-nowrap ${isToday ? 'shadow-[inset_3px_0_0_var(--color-accent)]' : ''}`} title={isToday ? (en ? 'Today' : '오늘') : undefined}>
@@ -390,7 +397,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                         {d.toLocaleDateString(en ? 'en-US' : 'ko-KR', { weekday: 'short' })}
                       </span>
                     </td>
-                    <td className="c num bg-accent-soft/30 whitespace-nowrap">
+                    <td className="r num bg-accent-soft/30 whitespace-nowrap">
                       {/* arrivals + guests still staying (merged) */}
                       {r.inHouse > 0 ? (
                         <span
@@ -406,8 +413,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                     <td className="r num bg-accent-soft/30 whitespace-nowrap" title={r.extrasList || undefined}>
                       {r.extrasAmount || r.extrasQty ? (
                         <>
-                          <span className="text-[11px] text-muted mr-1.5">{en ? `${r.extrasQty} ${r.extrasQty === 1 ? 'pc' : 'pcs'}` : `${r.extrasQty}개`}</span>
-                          {peso(r.extrasAmount)}
+                          <Pcs n={r.extrasQty} en={en}>{peso(r.extrasAmount)}</Pcs>
                         </>
                       ) : (
                         <span className="text-faint">—</span>
@@ -444,7 +450,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                       )}</td>
                     <td className="r num bg-accent-soft/30 whitespace-nowrap">{r.junketAll ? peso(r.junketAll) : <span className="text-faint">—</span>}</td>
                     <td
-                      className="r bg-warn-soft/30"
+                      className="r bg-warn-soft/30 whitespace-nowrap"
                       title={
                         r.vouchers
                           ? voucherSales
@@ -456,8 +462,9 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                     >
                       {r.vouchers ? (
                         <>
-                          <span className="text-[11px] text-muted mr-1.5">{en ? `${r.voucherQty} ${r.voucherQty === 1 ? 'pc' : 'pcs'}` : `${r.voucherQty}개`}</span>
-                          <span className="num font-semibold text-warn">{peso(r.voucherAmount)}</span>
+                          <Pcs n={r.voucherQty} en={en}>
+                            <span className="num font-semibold text-warn">{peso(r.voucherAmount)}</span>
+                          </Pcs>
                         </>
                       ) : (
                         <span className="text-faint">—</span>
@@ -466,20 +473,19 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                   </tr>
                 );
               })}
-              {/* takes up the space left over, so the grand total always sits at the bottom */}
-              <tr data-filler aria-hidden style={{ height: '100%' }} className="hover:!bg-transparent">
-                <td colSpan={9} className="!p-0 !border-0" />
-              </tr>
             </tbody>
-            <tfoot>
+            {/* stays at the bottom of the scrolling table */}
+            <tfoot className="sticky bottom-0 z-[1]">
               <tr className="font-semibold">
-                <td className="whitespace-nowrap">{en ? `Grand total · ${periodLabel}` : `총합계 · ${periodLabel}`}</td>
-                <td className="c num" title={en ? 'Guests in the room during this period (each counted once)' : '기간 중 투숙 손님 수 (중복 제외)'}>
+                <td className="leading-tight">
+                  {en ? 'Grand total' : '총합계'}
+                  <div className="text-[11px] font-normal text-muted">{periodLabel}</div>
+                </td>
+                <td className="r num" title={en ? 'Guests in the room during this period (each counted once)' : '기간 중 투숙 손님 수 (중복 제외)'}>
                   {t.guests || '—'}
                 </td>
                 <td className="r num whitespace-nowrap">
-                  {t.extrasQty > 0 && <span className="text-[11px] text-muted mr-1.5 font-normal">{en ? `${t.extrasQty} ${t.extrasQty === 1 ? 'pc' : 'pcs'}` : `${t.extrasQty}개`}</span>}
-                  {peso(t.extrasAmount)}
+                  <Pcs n={t.extrasQty} en={en}>{peso(t.extrasAmount)}</Pcs>
                 </td>
                 <td className="r num text-ink">{peso(t.total)}</td>
                 <td className="r num text-ok">{peso(t.paidAmount)}</td>
@@ -487,17 +493,12 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                 <td className="r num text-violet">{peso(t.hotelAll)}</td>
                 <td className="r num">{peso(t.junketAll)}</td>
                 <td className="r num whitespace-nowrap text-warn">
-                  {t.voucherQty > 0 && <span className="text-[11px] text-muted mr-1.5 font-normal">{en ? `${t.voucherQty} ${t.voucherQty === 1 ? 'pc' : 'pcs'}` : `${t.voucherQty}개`}</span>}
-                  {t.voucherAmount ? peso(t.voucherAmount) : '—'}
+                  <Pcs n={t.voucherQty} en={en}>{t.voucherAmount ? peso(t.voucherAmount) : '—'}</Pcs>
                 </td>
               </tr>
             </tfoot>
           </table>
         </div>
-        {/* always shown (page numbers only when needed) so the table area never jumps in height */}
-        {visible.length > 0 && (
-          <Pager page={tablePage} pages={tablePages} total={visible.length} size={TABLE_PAGE} onPage={setTablePage} en={en} unitLabel={en ? 'days' : '일'} />
-        )}
       </div>
 
       {selectedDate && (() => {
@@ -836,4 +837,10 @@ const Link: React.FC<{ value: string; tone: 'ok' | 'bad'; onClick: () => void }>
     <span className="text-faint">—</span>
   );
 
-
+/** An amount with its piece count after it, on one line ("₱14,500 20 pcs"). */
+const Pcs: React.FC<{ n: number; en: boolean; children: React.ReactNode }> = ({ n, en, children }) => (
+  <span className="whitespace-nowrap">
+    {children}
+    {n > 0 && <span className="ml-1.5 text-[11px] font-normal text-muted">{en ? `${n} ${n === 1 ? 'pc' : 'pcs'}` : `${n}개`}</span>}
+  </span>
+);

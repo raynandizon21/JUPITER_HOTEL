@@ -414,7 +414,10 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
 
       {/* Row 2 — daily settlement + payments / guest balances */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 mb-4">
-        <div className="xl:col-span-2 min-w-0 h-full">
+        {/* the card takes its height from the row (the cards on the right), never from its days,
+            so only the table inside it scrolls; on narrow screens it gets a fixed height */}
+        <div className="xl:col-span-2 min-w-0 relative h-[640px] xl:h-auto xl:min-h-[560px]">
+          <div className="absolute inset-0">
           <DailySettlement
             embedded
             reservations={reservations}
@@ -425,6 +428,7 @@ export const DailyDashboard: React.FC<DailyDashboardProps> = ({
             setSelectedMonth={setSelectedMonth}
             language={language}
           />
+          </div>
         </div>
 
         <div className="flex flex-col gap-4">

@@ -187,12 +187,15 @@ const money = (v: number) => v.toLocaleString('en-US', { minimumFractionDigits: 
 type SheetRow = { name: string; rate: number; qty: number; amt: number };
 type Section = { title: string; rateHead: string; qtyHead: string; rows: SheetRow[] };
 
-/** A day's sheet sections (hotel format): rooms and vouchers bought that day, unit cost × qty = sub-total. */
+const lineOrder = (l: BillLine, rates: CasinoRatesConfig) => (l.kind === 'room' ? rates.rooms.findIndex((r) => r.id === l.item) : 100 + ['breakfast', 'dinner', 'extraBed'].indexOf(l.item));
+
+/** A day's sheet sections (hotel format): rooms and vouchers bought that day, unit cost × qty = sub-total.
+ *  Complimentary lines (₱0) are not here — they get their own table (`dayComps`). */
 function daySections(day: DayBill, rates: CasinoRatesConfig, en: boolean): Section[] {
-  const order = (l: BillLine) => (l.kind === 'room' ? rates.rooms.findIndex((r) => r.id === l.item) : ['breakfast', 'dinner', 'extraBed'].indexOf(l.item));
+  const order = (l: BillLine) => lineOrder(l, rates);
   const rowsOf = (kind: 'room' | 'voucher') =>
     day.lines
-      .filter((l) => l.kind === kind)
+      .filter((l) => l.kind === kind && l.unitCost > 0)
       .sort((x, y) => order(x) - order(y) || y.unitCost - x.unitCost)
       .map((l) => ({ name: itemLabel(l, rates, en), rate: l.unitCost, qty: l.qty, amt: l.amt }));
   const sections: Section[] = [
@@ -201,6 +204,16 @@ function daySections(day: DayBill, rates: CasinoRatesConfig, en: boolean): Secti
   ];
   return sections.filter((sec) => sec.rows.length > 0);
 }
+
+/** Complimentary from the hotel that day (₱0 lines): item, room / voucher, qty — not billed. */
+type CompRow = { name: string; type: string; qty: number };
+function dayComps(day: DayBill, rates: CasinoRatesConfig, en: boolean): CompRow[] {
+  return day.lines
+    .filter((l) => !l.unitCost)
+    .sort((x, y) => lineOrder(x, rates) - lineOrder(y, rates))
+    .map((l) => ({ name: itemLabel(l, rates, en), type: l.kind === 'room' ? (en ? 'Room-night' : '객실(박)') : en ? 'Voucher' : '바우처', qty: l.qty }));
+}
+const compTitle = (en: boolean) => (en ? 'Complimentary from the hotel (not billed)' : '호텔 무료 제공 (청구 없음)');
 
 const dayTitle = (date: string, en: boolean) => `${weekday(date, en)}, ${formatLongDate(date)}`;
 const monthName = (month: string) => formatMonth(month).split(' ')[0];
@@ -215,13 +228,21 @@ const PDF_CSS = `<style>
   .pdfdoc .sheet .h td{background:#3b4452;color:#e9c46a;font-weight:600;text-align:center} .pdfdoc .sheet .h td:first-child{text-align:left}
   .pdfdoc .r{text-align:right} .pdfdoc .c{text-align:center} .pdfdoc .peso{display:flex;justify-content:space-between}
   .pdfdoc .bar td{background:#111214;color:#e9c46a;font-weight:700}
+  .pdfdoc .sheet .comp td{background:#2e7a57;color:#ffffff}
   .pdfdoc .sign{display:flex;gap:60px;margin-top:50px} .pdfdoc .sign div{flex:1;border-top:1px solid #111214;padding-top:6px;text-align:center}
 </style>`;
 const esc = (t: string) => t.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
 
 function dayHtml(day: DayBill, rates: CasinoRatesConfig, en: boolean) {
   const secs = daySections(day, rates, en);
-  if (!secs.length) return '';
+  const comps = dayComps(day, rates, en);
+  if (!secs.length && !comps.length) return '';
+  const compHtml = comps.length
+    ? `<table class="sheet" style="margin-top:10px"><tr class="h comp"><td>${esc(compTitle(en))}</td><td>${en ? 'Type' : '구분'}</td><td>${en ? 'Qty' : '수량'}</td></tr>${comps
+        .map((r) => `<tr><td>${esc(r.name)}</td><td class="c">${esc(r.type)}</td><td class="c">${r.qty}</td></tr>`)
+        .join('')}</table>`
+    : '';
+  if (!secs.length) return `<h2>${esc(dayTitle(day.date, en))}</h2><div class="muted">${en ? 'Nothing to pay on this day.' : '이 날 지급할 금액 없음'}</div>${compHtml}`;
   const span = secs.reduce((a, s) => a + s.rows.length + 1, 0) - 1;
   let first = true;
   const body = secs
@@ -239,7 +260,7 @@ function dayHtml(day: DayBill, rates: CasinoRatesConfig, en: boolean) {
       return head + rows;
     })
     .join('');
-  return `<h2>${esc(dayTitle(day.date, en))}</h2><table class="sheet">${body}</table>`;
+  return `<h2>${esc(dayTitle(day.date, en))}</h2><table class="sheet">${body}</table>${compHtml}`;
 }
 
 function headerHtml(month: string, last: string, en: boolean, title: string) {
@@ -321,9 +342,33 @@ function writeDay(ws: import('exceljs').Worksheet, row: number, day: DayBill, ra
   ws.getCell(row, 1).value = dayTitle(day.date, en);
   ws.getCell(row, 1).font = { bold: true, size: 12 };
   row++;
+  const comps = dayComps(day, rates, en);
+  // complimentary lines: own table under the bill (item · type · qty, no price)
+  const writeComps = (r: number) => {
+    if (!comps.length) return r;
+    const h = ws.getRow(r);
+    h.values = [compTitle(en), en ? 'Type' : '구분', en ? 'Qty' : '수량'];
+    for (let c = 1; c <= 3; c++) {
+      const cell = h.getCell(c);
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF2E7A57' } };
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.alignment = { horizontal: c === 1 ? 'left' : 'center' };
+      cell.border = box;
+    }
+    r++;
+    for (const x of comps) {
+      const line = ws.getRow(r);
+      line.values = [x.name, x.type, x.qty];
+      line.getCell(2).alignment = { horizontal: 'center' };
+      line.getCell(3).alignment = { horizontal: 'center' };
+      for (let c = 1; c <= 3; c++) line.getCell(c).border = box;
+      r++;
+    }
+    return r;
+  };
   if (!secs.length) {
-    ws.getCell(row, 1).value = en ? 'Nothing bought from the hotel on this day.' : '구매 없음';
-    return row + 2;
+    ws.getCell(row, 1).value = comps.length ? (en ? 'Nothing to pay on this day.' : '이 날 지급할 금액 없음') : en ? 'Nothing bought from the hotel on this day.' : '구매 없음';
+    return writeComps(row + (comps.length ? 1 : 0)) + 2;
   }
   const start = row;
   secs.forEach((sec, si) => {
@@ -355,7 +400,7 @@ function writeDay(ws: import('exceljs').Worksheet, row: number, day: DayBill, ra
   t.font = { bold: true, size: 12 };
   t.alignment = { vertical: 'middle', horizontal: 'right' };
   t.border = box;
-  return row + 1;
+  return writeComps(comps.length ? row + 1 : row) + 1;
 }
 
 async function download(wb: import('exceljs').Workbook, name: string) {
@@ -422,6 +467,7 @@ const DayBreakdown: React.FC<{
   onNext?: () => void;
 }> = ({ day, rates, en, onClose, onPrev, onNext }) => {
   const shown = daySections(day, rates, en);
+  const comps = dayComps(day, rates, en);
   const totalRows = shown.reduce((a, sec) => a + sec.rows.length + 1, 0);
   const B = 'border border-ink'; // black lines (light in dark mode)
   const HEAD = `${B} bg-[#3b4452] text-[#e9c46a] font-semibold px-2 py-[3px] text-[12px]`;
@@ -452,7 +498,9 @@ const DayBreakdown: React.FC<{
     >
       <div className="px-6 py-3">
         {shown.length === 0 ? (
-          <div className="py-10 text-center text-[13px] text-muted">{en ? 'Nothing bought from the hotel on this day.' : '이 날 호텔 구매가 없습니다.'}</div>
+          <div className={`${comps.length ? 'py-3' : 'py-10'} text-center text-[13px] text-muted`}>
+            {comps.length ? (en ? 'Nothing to pay on this day — only complimentary items.' : '이 날 지급할 금액 없음 — 무료 제공만 있음') : en ? 'Nothing bought from the hotel on this day.' : '이 날 호텔 구매가 없습니다.'}
+          </div>
         ) : (
         <table className="w-full border-collapse bg-surface text-ink">
           <colgroup>
@@ -497,6 +545,30 @@ const DayBreakdown: React.FC<{
             ))}
           </tbody>
         </table>
+        )}
+        {/* complimentary (₱0) items: own table, no price — so a ₱0 line is not read as an unknown amount */}
+        {comps.length > 0 && (
+          <table className={`w-full border-collapse bg-surface text-ink ${shown.length ? 'mt-3' : ''}`}>
+            <colgroup>
+              <col className="w-[45%]" />
+              <col className="w-[30%]" />
+              <col className="w-[25%]" />
+            </colgroup>
+            <tbody>
+              <tr>
+                <td className={`${B} bg-ok text-white font-semibold px-2 py-[3px] text-[12px]`}>{compTitle(en)}</td>
+                <td className={`${B} bg-ok text-white font-semibold px-2 py-[3px] text-[12px] text-center`}>{en ? 'Type' : '구분'}</td>
+                <td className={`${B} bg-ok text-white font-semibold px-2 py-[3px] text-[12px] text-center`}>{en ? 'Qty' : '수량'}</td>
+              </tr>
+              {comps.map((r, i) => (
+                <tr key={i} className="bg-ok-soft/40">
+                  <td className={`${CELL} whitespace-nowrap`}>{r.name}</td>
+                  <td className={`${CELL} text-center`}>{r.type}</td>
+                  <td className={`${CELL} text-center num font-semibold`}>{r.qty}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </div>
       <div className="px-6 py-3 border-t border-line bg-sunken flex justify-end gap-2">

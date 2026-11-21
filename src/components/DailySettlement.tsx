@@ -526,10 +526,34 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
         // two tabs = the table's two columns: Buffet / extras (with a booking) and Vouchers sold (vouchers only)
         const extras = buffet.filter((x) => x.src === 'room');
         const sold = buffet.filter((x) => x.src === 'voucher');
-        const items = dayTab === 'sold' ? sold : extras;
+        // paid part of each line: a booking's payments cover its earliest days first and, on a day, the room
+        // night before the extras (same as the table); a voucher-only sale's payments cover its items in order
+        const linePaid = new Map<string, number>();
+        for (const r of reservations) {
+          const lines = (r.charges || []).filter((c) => c.date === selectedDate);
+          if (!lines.length) continue;
+          const sh = dayShares.get(r.id)?.get(selectedDate);
+          let left = sh ? Math.max(0, sh.paid - sh.room) : 0;
+          for (const c of lines) {
+            const p = Math.min(chargeAmount(c), left);
+            left -= p;
+            linePaid.set(`r-${r.id}-${c.id}`, p);
+          }
+        }
+        for (const v of voucherSales.filter((x) => x.date === selectedDate)) {
+          let left = voucherTotals(v).paid;
+          for (const c of v.items) {
+            const p = Math.max(0, Math.min(chargeAmount(c), left));
+            left -= p;
+            linePaid.set(`v-${v.id}-${c.id}`, p);
+          }
+        }
+        const paidOf = (x: (typeof buffet)[number]) => linePaid.get(x.key) || 0;
+        const unpaidOf = (x: (typeof buffet)[number]) => chargeAmount(x.c) - paidOf(x);
+        const items = (dayTab === 'sold' ? sold : extras).filter((x) => (view === 'all' ? true : view === 'paid' ? unpaidOf(x) <= 0 : unpaidOf(x) > 0));
         // hotel cost of a buffet / voucher line (null = not bought through a booking / voucher form)
         const buffetCost = (x: (typeof buffet)[number]) => voucherHotelCost(x.c, x.buyId, purchases);
-        const itemsTotal = { qty: items.reduce((a, x) => a + x.c.qty, 0), amount: items.reduce((a, x) => a + chargeAmount(x.c), 0), hotel: items.reduce((a, x) => a + (buffetCost(x) || 0), 0) };
+        const itemsTotal = { qty: items.reduce((a, x) => a + x.c.qty, 0), amount: items.reduce((a, x) => a + chargeAmount(x.c), 0), hotel: items.reduce((a, x) => a + (buffetCost(x) || 0), 0), paid: items.reduce((a, x) => a + paidOf(x), 0), unpaid: items.reduce((a, x) => a + unpaidOf(x), 0) };
         const isItems = dayTab === 'buffet' || dayTab === 'sold';
         const z = <span className="text-faint">—</span>;
         const comp = <span className="text-ok">{en ? 'Complimentary' : '무료'}</span>;
@@ -731,7 +755,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                   // Buffet / extras = blue (like its table column), Vouchers sold = gold
                   const hd = dayTab === 'sold' ? '!bg-warn-soft !text-warn' : '!bg-accent-soft !text-accent';
                   const billing = dayTab === 'buffet';
-                  const cols = billing ? 7 : 6;
+                  const cols = billing ? 9 : 8;
                   return (
                     <table className="dtable compact whitespace-nowrap">
                       <thead>
@@ -742,6 +766,8 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                           <th className={`r ${hd}`}>{en ? 'Unit price' : '단가'}</th>
                           <th className="r !bg-violet-soft !text-violet">{en ? 'Hotel cost' : '호텔 원가'}</th>
                           <th className={`r ${hd}`}>{en ? 'Amount' : '금액'}</th>
+                          <th className="r !bg-ok-soft !text-ok">{en ? 'Paid' : '결제'}</th>
+                          <th className="r !bg-bad-soft !text-bad">{en ? 'Unpaid' : '미결제'}</th>
                           {billing && <th className="c !bg-accent-soft !text-accent">{en ? 'Billing' : '청구서'}</th>}
                         </tr>
                       </thead>
@@ -774,6 +800,8 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                               <td className="r num text-ink-2">{x.c.free ? comp : peso(x.c.unitPrice)}</td>
                               <td className="r num text-ink-2">{cost === null ? z : cost === 0 ? comp : peso(cost)}</td>
                               <td className="r num font-semibold text-ink">{peso(chargeAmount(x.c))}</td>
+                              <td className="r num bg-ok-soft/30">{paidOf(x) ? <span className="text-ok font-semibold">{peso(paidOf(x))}</span> : <span className="text-muted">{peso(0)}</span>}</td>
+                              <td className="r num bg-bad-soft/30">{unpaidOf(x) > 0 ? <span className="text-bad font-semibold">{peso(unpaidOf(x))}</span> : <span className="text-muted">{peso(0)}</span>}</td>
                               {billing && (
                                 <td className="c">
                                   <button onClick={() => setFolioId(x.resId)} className="icon-btn" title={en ? 'Billing' : '청구서'}>
@@ -798,6 +826,8 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                             <td />
                             <td className="r num">{peso(itemsTotal.hotel)}</td>
                             <td className={`r num ${dayTab === 'sold' ? 'text-warn' : 'text-ink'}`}>{peso(itemsTotal.amount)}</td>
+                            <td className="r num text-ok">{peso(itemsTotal.paid)}</td>
+                            <td className="r num text-bad">{peso(itemsTotal.unpaid)}</td>
                             {billing && <td />}
                           </tr>
                         </tfoot>

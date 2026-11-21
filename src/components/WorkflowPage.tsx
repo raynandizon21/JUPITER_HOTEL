@@ -75,8 +75,8 @@ export const WorkflowPage: React.FC<{
           sub: en ? 'what Jupiter pays Hilton' : '주피터 → 힐튼',
           tone: 'bg-violet-soft text-violet border-violet-line',
           do: en
-            ? [['Cost per night', 'last price paid is filled in'], ['Free night from Hilton?', 'tick its Complimentary box → ₱0']]
-            : [['1박 원가', '최근 구매가 자동 입력'], ['힐튼 무료 숙박?', '무료 칸 체크 → ₱0']],
+            ? [['Cost per night', 'a box per night · same-rate nights fill in, each can be changed'], ['Free night from Hilton?', 'Source → Complimentary → ₱0']]
+            : [['1박 원가', '박마다 입력 · 같은 요금 박 자동 입력, 수정 가능'], ['힐튼 무료 숙박?', '출처 → 호텔 무료 → ₱0']],
         },
         {
           label: en ? 'Guest' : '손님',
@@ -112,8 +112,8 @@ export const WorkflowPage: React.FC<{
       soft: 'bg-violet-soft text-violet hover:bg-violet hover:text-white',
       title: en ? 'Close the month' : '월 마감',
       do: en
-        ? [['Check every day', 'Daily Settlement: Hotel / Junket rate vs Hilton report'], ['Pick the month', 'on the Dashboard'], ['Pay the balance', 'then Print statement / Excel']]
-        : [['매일 확인', '일일 정산: 호텔/정킷 요금 vs 힐튼 보고서'], ['월 선택', '대시보드에서'], ['잔액 지급', '정산서 인쇄 / 엑셀']],
+        ? [['Check every day', 'Daily Settlement: Hotel total bill vs Guest total bill'], ['Pick the month', 'on the Dashboard'], ['Pay the balance', 'then Print statement / Excel']]
+        : [['매일 확인', '일일 정산: 호텔 총 청구액 vs 손님 총 청구액'], ['월 선택', '대시보드에서'], ['잔액 지급', '정산서 인쇄 / 엑셀']],
       result: en ? 'Balance due ₱0 → Settled' : '잔액 ₱0 → 정산 완료',
       tip: en ? 'The Hilton bill is the purchases dated that month.' : '힐튼 청구액 = 그 달 구매일의 구매액.',
       to: 'dashboard',

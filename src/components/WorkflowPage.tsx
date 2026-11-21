@@ -27,7 +27,7 @@ type Step = {
   to: ActiveModule;
   page: string;
   /** one process, two sides of the same form (Hotel | Guest), shown side by side — the card is 2 columns wide */
-  sides?: { label: string; sub: string; tone: string; do: [string, string][] }[];
+  sides?: { label: string; sub: string; tone: string; do: [string, string, string[]?][] }[];
   /** actions after the sides */
   then?: [string, string][];
 };
@@ -56,8 +56,8 @@ export const WorkflowPage: React.FC<{
       soft: 'bg-ink/10 text-ink hover:bg-ink hover:text-white',
       title: en ? 'Set guest prices' : '손님 가격 설정',
       do: en
-        ? [['Open Settings', 'on the Room Rates page'], ['Type the room rates', 'Sun–Thu / Fri–Sat, 1–2 or 3 guests'], ['Set voucher prices → Save', 'breakfast, dinner, extra bed']]
-        : [['설정 열기', '객실 요금 페이지'], ['객실 요금 입력', '일~목 / 금~토, 1~2인 / 3인'], ['바우처 가격 → 저장', '조식, 석식, 엑스트라 베드']],
+        ? [['Open Settings', 'on the Room Rates page'], ['Type the room rates', 'Sun–Thu / Fri–Sat, Single / Double or Triple'], ['Set voucher prices → Save', 'breakfast, dinner, extra bed']]
+        : [['설정 열기', '객실 요금 페이지'], ['객실 요금 입력', '일~목 / 금~토, 싱글·더블 / 트리플'], ['바우처 가격 → 저장', '조식, 석식, 엑스트라 베드']],
       result: en ? 'New bookings are priced automatically' : '새 예약 요금 자동 계산',
       tip: en ? 'Holiday nights use the Fri–Sat rate (⚙ Holidays on the Guest Ledger).' : '공휴일은 금~토 요금 (예약 관리부 ⚙ 공휴일).',
       to: 'maintenance',
@@ -75,8 +75,8 @@ export const WorkflowPage: React.FC<{
           sub: en ? 'what Jupiter pays Hilton' : '주피터 → 힐튼',
           tone: 'bg-violet-soft text-violet border-violet-line',
           do: en
-            ? [['Cost per night', 'a box per night · same-rate nights fill in, each can be changed'], ['Free night from Hilton?', 'Source → Complimentary → ₱0']]
-            : [['1박 원가', '박마다 입력 · 같은 요금 박 자동 입력, 수정 가능'], ['힐튼 무료 숙박?', '출처 → 호텔 무료 → ₱0']],
+            ? [['Cost per night', 'same-rate nights fill in · editable'], ['Source', 'each night & voucher', ['Buy now — type the cost', 'From stock — no new cost', 'Complimentary — ₱0']]]
+            : [['1박 원가', '같은 요금 박 자동 입력 · 수정 가능'], ['출처', '박·바우처별', ['지금 구매 — 원가 입력', '재고 사용 — 추가 원가 없음', '호텔 무료 — ₱0']]],
         },
         {
           label: en ? 'Guest' : '손님',
@@ -195,10 +195,17 @@ export const WorkflowPage: React.FC<{
                             <span className="text-[11px] opacity-75 truncate">{side.sub}</span>
                           </div>
                           <ul className="p-2.5 space-y-2">
-                            {side.do.map(([action, detail]) => (
+                            {side.do.map(([action, detail, bullets]) => (
                               <li key={action} className="leading-tight">
                                 <div className="text-[13px] font-semibold text-ink">{action}</div>
                                 <div className="text-[11.5px] text-muted mt-0.5">{detail}</div>
+                                {bullets && (
+                                  <ul className="mt-1 space-y-0.5 list-disc pl-4 marker:text-faint">
+                                    {bullets.map((b) => (
+                                      <li key={b} className="text-[11.5px] text-ink-2">{b}</li>
+                                    ))}
+                                  </ul>
+                                )}
                               </li>
                             ))}
                           </ul>

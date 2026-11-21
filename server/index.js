@@ -81,6 +81,7 @@ const VOUCHER_TABLES = [
   \`ITEM_CODE\`    VARCHAR(50)   NOT NULL COMMENT 'room_types.ROOM_CODE, or breakfast / dinner / extraBed',
   \`QTY\`          INT           NOT NULL COMMENT 'room-nights or vouchers',
   \`UNIT_COST\`    DECIMAL(12,2) NOT NULL COMMENT 'wholesale price per unit',
+  \`NIGHT_DATES\`  TEXT          NULL COMMENT 'room line bought with a booking: its nights (YYYY-MM-DD, comma-separated)',
   \`AMOUNT\`       DECIMAL(12,2) AS (\`QTY\` * \`UNIT_COST\`) STORED,
   PRIMARY KEY (\`IDNo\`),
   KEY \`idx_purchase_items_purchase\` (\`PURCHASE_ID\`),
@@ -247,6 +248,7 @@ async function ensureColumns() {
     ['hotel_payments', 'FUND', "ENUM('room','voucher') NOT NULL DEFAULT 'room' COMMENT 'fund it was paid from' AFTER `METHOD`"],
     ['hotel_payments', 'RECORDED_AT', "DATETIME NULL COMMENT 'when the payment was first recorded (kept when the list is re-saved)' AFTER `REMARKS`"],
     ['voucher_sale_payments', 'RECORDED_AT', "DATETIME NULL COMMENT 'when the payment was first recorded (kept when the list is re-saved)' AFTER `REFERENCE`"],
+    ['hotel_purchase_items', 'NIGHT_DATES', "TEXT NULL COMMENT 'room line bought with a booking: its nights (YYYY-MM-DD, comma-separated)' AFTER `UNIT_COST`"],
   ];
   for (const [table, col, def] of wanted) {
     const [rows] = await pool.query(
@@ -528,7 +530,7 @@ app.get(
       remarks: p.REMARKS || '',
       items: piRows
         .filter((i) => i.PURCHASE_ID === p.IDNo)
-        .map((i) => ({ id: `pi${i.IDNo}`, kind: i.ITEM_KIND, item: i.ITEM_CODE, qty: i.QTY, unitCost: i.UNIT_COST })),
+        .map((i) => ({ id: `pi${i.IDNo}`, kind: i.ITEM_KIND, item: i.ITEM_CODE, qty: i.QTY, unitCost: i.UNIT_COST, ...(i.NIGHT_DATES ? { dates: i.NIGHT_DATES.split(',') } : {}) })),
     }));
 
     const [fundRows] = await pool.query('SELECT * FROM fund_transactions ORDER BY TXN_DATE, IDNo');
@@ -938,13 +940,14 @@ app.put(
         purchaseId = ins.insertId;
       }
       await conn.query('DELETE FROM hotel_purchase_items WHERE PURCHASE_ID = ?', [purchaseId]);
-      await conn.query('INSERT INTO hotel_purchase_items (PURCHASE_ID, ITEM_KIND, ITEM_CODE, QTY, UNIT_COST) VALUES ?', [
+      await conn.query('INSERT INTO hotel_purchase_items (PURCHASE_ID, ITEM_KIND, ITEM_CODE, QTY, UNIT_COST, NIGHT_DATES) VALUES ?', [
         items.map((i) => [
           purchaseId,
           i.kind === 'voucher' ? 'voucher' : 'room',
           String(i.item).slice(0, 50),
           Math.round(Number(i.qty)),
           Math.max(0, Number(i.unitCost) || 0),
+          Array.isArray(i.dates) && i.dates.length ? i.dates.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).join(',') : null,
         ]),
       ]);
     });

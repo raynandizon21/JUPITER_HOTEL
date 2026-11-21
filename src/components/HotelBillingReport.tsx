@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { ChevronLeft, ChevronRight, FileDown, FileSpreadsheet, FileText } from 'lucide-react';
 import { CasinoRatesConfig, HotelPurchase } from '../types/hotel';
-import { formatLongDate, formatMonth, getDayCategory, getDaysInMonth } from '../utils/hotelHelpers';
+import { addDays, formatLongDate, formatMonth, getDayCategory, getDaysInMonth } from '../utils/hotelHelpers';
 import { peso, todayISO } from '../utils/billing';
 import { itemLabel } from '../utils/inventory';
 import { Language } from '../i18n/translations';
@@ -169,6 +169,18 @@ export const DailyBillList: React.FC<{ month: string; bill: DayBill[]; rates: Ca
       )}
     </>
   );
+};
+
+/**
+ * The hotel's bill for one day in the hotel-sheet format (same pop-up as a day in DailyBillList);
+ * ‹ › step through the days (any month). Used by the Daily Settlement's Hotel bill column.
+ */
+export const HotelBillDay: React.FC<{ date: string; purchases: HotelPurchase[]; rates: CasinoRatesConfig; en: boolean; onClose: () => void }> = ({ date, purchases, rates, en, onClose }) => {
+  const [d, setD] = useState(date);
+  const bill = useMonthBill(d.slice(0, 7), purchases);
+  const day = bill.find((x) => x.date === d);
+  if (!day) return null;
+  return <DayBreakdown day={day} rates={rates} en={en} onClose={onClose} onPrev={() => setD(addDays(d, -1))} onNext={() => setD(addDays(d, 1))} />;
 };
 
 const money = (v: number) => v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });

@@ -301,26 +301,26 @@ export async function exportSettlementExcel(
  */
 export async function exportDailyExcel(
   month: string,
-  rows: { date: string; checkIns: number; inHouse: number; nights: number; total: number; roomAmount: number; hotelAmount: number; hotelAll: number; junketAll: number; extrasAmount: number; paid: number; paidAmount: number; unpaid: number; unpaidAmount: number; voucherAmount: number }[],
+  rows: { date: string; checkIns: number; inHouse: number; guestPaid: number; guestUnpaid: number; hotelBill: number; guestBill: number }[],
   roomsInUse: number
 ) {
   const ExcelJS = (await import('exceljs')).default;
   const wb = new ExcelJS.Workbook();
   wb.creator = 'Jupiter Hotel PMS';
   const ws = wb.addWorksheet('Daily Settlement', { views: [{ state: 'frozen', ySplit: 6, showGridLines: false }] });
-  ws.columns = [{ width: 14 }, { width: 14 }, { width: 18 }, { width: 18 }, { width: 18 }, { width: 18 }, { width: 18 }, { width: 18 }, { width: 22 }];
+  ws.columns = [{ width: 14 }, { width: 16 }, { width: 20 }, { width: 20 }, { width: 20 }, { width: 20 }];
   const NAVY = 'FF1F3A5F';
   const thin = { style: 'thin' as const, color: { argb: 'FFD0D3DA' } };
 
-  ws.mergeCells('A1:I1');
+  ws.mergeCells('A1:F1');
   Object.assign(ws.getCell('A1'), { value: '일별 호텔 예약 & 결제 정산 대시보드  ·  Daily Hotel Reservation & Settlement' });
   ws.getCell('A1').font = { bold: true, size: 15, color: { argb: 'FFFFFFFF' } };
   ws.getCell('A1').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } };
   ws.getCell('A1').alignment = { horizontal: 'center', vertical: 'middle' };
   ws.getRow(1).height = 30;
 
-  ws.mergeCells('A2:I2');
-  ws.getCell('A2').value = '※ 예약 목록에 입력된 데이터가 자동으로 집계됩니다. 금액은 체크인 날짜 기준으로 집계됩니다. (Totals come from the Guest Ledger, counted on the check-in date.)';
+  ws.mergeCells('A2:F2');
+  ws.getCell('A2').value = '※ 손님 청구액 = 이날 숙박 + 추가 + 바우처 판매, 호텔 청구액 = 이날 호텔 구매. (Guest bill = room nights of this day + extras + vouchers sold; Hotel bill = Hotel Purchases dated this day.)';
   ws.getCell('A2').font = { italic: true, size: 9, color: { argb: 'FF6B6E76' } };
 
   ws.getCell('A3').value = '조회 월 (Month)';
@@ -335,8 +335,8 @@ export async function exportDailyExcel(
   ws.getCell('F3').numFmt = '0"실"';
   ws.getCell('F3').font = { bold: true };
 
-  const ko = ['날짜', '객실 (체크인 목록)', '뷔페·추가 (PHP)', '총 금액 (PHP)', '결제 금액 (PHP)', '미결제 금액 (PHP)', '호텔 요금 (PHP)', '정킷 요금 (PHP)', '바우처 판매 (PHP)'];
-  const enH = ['Date', 'Rooms (Check-in List)', 'Buffet / Extras', 'Total Amount', 'Paid Amount', 'Unpaid Amount', 'Hotel Rate', 'Junket Rate', 'Vouchers Sold (for record)'];
+  const ko = ['날짜', '객실 (체크인 목록)', '호텔 총 청구액', '손님 총 청구액', '결제 금액 (손님)', '미결제 금액 (손님)'];
+  const enH = ['Date', 'Rooms (Check-in List)', 'Hotel Total Bill', 'Guest Total Bill', 'Paid Amount (Guest)', 'Unpaid Amount (Guest)'];
   ws.getRow(5).values = ko;
   ws.getRow(6).values = enH;
   [5, 6].forEach((r) => {
@@ -348,26 +348,25 @@ export async function exportDailyExcel(
     ws.getRow(r).height = 20;
   });
 
-  const fmts = ['d-mmm-yy', '0"건"', PESO, PESO, PESO, PESO, PESO, PESO, PESO];
+  const fmts = ['d-mmm-yy', '0"건"', PESO, PESO, PESO, PESO];
   rows.forEach((r, i) => {
     const row = ws.getRow(7 + i);
-    row.values = [toDate(r.date), r.inHouse, r.extrasAmount, r.total, r.paidAmount, r.unpaidAmount, r.hotelAll, r.junketAll, r.voucherAmount];
+    row.values = [toDate(r.date), r.inHouse, r.hotelBill, r.guestBill, r.guestPaid, r.guestUnpaid];
     row.eachCell({ includeEmpty: true }, (c, col) => {
       c.numFmt = fmts[col - 1];
       c.border = { top: thin, bottom: thin, left: thin, right: thin };
       c.alignment = { horizontal: col === 1 ? 'center' : 'right' };
       if (col === 1 && getDayCategory(r.date) === 'weekend') c.font = { color: { argb: 'FFC0662B' }, bold: true };
-      if (col === 4 && r.total) c.font = { bold: true };
-      if (col === 5 && r.paidAmount) c.font = { color: { argb: 'FF2E7A57' }, bold: true };
-      if (col === 6 && r.unpaidAmount) c.font = { color: { argb: 'FFB4372C' }, bold: true };
-      if (col === 7 && r.hotelAll) c.font = { color: { argb: 'FF6A48C2' } };
-      if (col === 9 && r.voucherAmount) c.font = { color: { argb: 'FFA86A12' }, bold: true };
+      if (col === 3 && r.hotelBill) c.font = { color: { argb: 'FF6A48C2' }, bold: true };
+      if (col === 4 && r.guestBill) c.font = { bold: true };
+      if (col === 5 && r.guestPaid) c.font = { color: { argb: 'FF2E7A57' }, bold: true };
+      if (col === 6 && r.guestUnpaid) c.font = { color: { argb: 'FFB4372C' }, bold: true };
     });
     if (r.checkIns) row.getCell(2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE9EFFC' } };
   });
   const end = 7 + rows.length;
   const S = (col: string) => ({ formula: `SUM(${col}7:${col}${end - 1})` });
-  ws.getRow(end).values = ['총합계 (Grand total)', rows.reduce((a, r) => a + r.checkIns, 0) + (rows[0] ? rows[0].inHouse - rows[0].checkIns : 0), S('C'), S('D'), S('E'), S('F'), S('G'), S('H'), S('I')];
+  ws.getRow(end).values = ['총합계 (Grand total)', rows.reduce((a, r) => a + r.checkIns, 0) + (rows[0] ? rows[0].inHouse - rows[0].checkIns : 0), S('C'), S('D'), S('E'), S('F')];
   ws.getRow(end).eachCell({ includeEmpty: true }, (c, col) => {
     c.numFmt = col === 1 ? '@' : fmts[col - 1];
     c.font = { bold: true };

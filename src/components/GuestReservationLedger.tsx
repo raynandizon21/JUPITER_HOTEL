@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Agent, Holiday, Reservation, CasinoRatesConfig, PaymentStatus, VoucherSale, FolioCharge, HotelPurchase } from '../types/hotel';
+import { Agent, Holiday, Reservation, CasinoRatesConfig, PaymentStatus, VoucherSale, FolioCharge, HotelPurchase, PurchaseItem } from '../types/hotel';
 import { getReferenceMonth, exportToCSV, getNightlyRates, addDays, formatLongDate, formatMonth, formatDateRange, nightsLabel, getStayNights, getDaysInMonth } from '../utils/hotelHelpers';
 import { Plus, Search, Download, Pencil, Trash2, Sparkles, Receipt, Ticket, BedDouble, Settings2, CircleCheck, CircleX } from 'lucide-react';
 import { GuestFolio, FolioStatusBadge } from './GuestFolio';
@@ -148,6 +148,8 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
   const [hotelComps, setHotelComps] = useState<string[]>([]);
   // room nights taken from room-nights bought earlier (Hotel Purchases) — not in this booking's purchase
   const [roomStock, setRoomStock] = useState<string[]>([]);
+  // hotel cost per room night bought with the booking (null = cleared); same-rate nights are pre-filled
+  const [nightCosts, setNightCosts] = useState<Record<string, number | null>>({});
 
   // Night-by-night charges from the Room Rates master (holiday nights use the weekend rate)
   const nightly = useMemo(() => {
@@ -203,6 +205,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
     setVoucherSource({});
     setHotelComps([]);
     setRoomStock([]);
+    setNightCosts({});
     setBuyTried(false);
     setAmountTouched(false);
     setConfirming(false);
@@ -269,8 +272,19 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
           )
         : {}
     );
-    // nights cost the same, so which ones are complimentary only matters for the count
-    setHotelComps(hasPaidRoom || stockNights.length ? stayNights.slice(0, roomCompQty) : []);
+    const roomItems = items.filter((i) => i.kind === 'room');
+    if (roomItems.length && roomItems.every((i) => i.dates?.length)) {
+      // saved per night: each line knows its nights (₱0 lines = complimentary, nights in no line = from stock)
+      const own = new Set(roomItems.flatMap((i) => i.dates || []));
+      setRoomStock(stayNights.filter((d) => !own.has(d)));
+      setHotelComps(roomItems.filter((i) => !i.unitCost).flatMap((i) => i.dates || []));
+      setNightCosts(Object.fromEntries(roomItems.filter((i) => i.unitCost > 0).flatMap((i) => (i.dates || []).map((d) => [d, i.unitCost]))));
+    } else {
+      // older purchase (one cost for all nights): complimentary nights first, then bought nights at that cost
+      setHotelComps(hasPaidRoom || stockNights.length ? stayNights.slice(0, roomCompQty) : []);
+      const cost = roomItems.find((i) => i.unitCost > 0)?.unitCost;
+      setNightCosts(cost ? Object.fromEntries(stayNights.slice(roomCompQty, roomCompQty + roomPaidQty).map((d) => [d, cost])) : {});
+    }
     setBuyTried(false);
     setAmountTouched(true); // keep the saved amount unless the user recalculates
     setConfirming(false);
@@ -293,7 +307,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
   const formRoomId = casinoRates.rooms.find((x) => x.name.toLowerCase() === formRoomType.toLowerCase())?.id ?? null;
   // quantities follow the booking: nights of its room type + its vouchers
   const stockLeft = useStockLeft(en, editingReservation ? { reservationId: editingReservation.id } : undefined);
-  const buyLines = useMemo<(BuyLine & { stock: boolean; left: number; stockQty: number })[]>(() => {
+  const buyLines = useMemo<(BuyLine & { stock: boolean; left: number; stockQty: number; roomCost: number })[]>(() => {
     const need = new Map<string, number>();
     if (formRoomId && formNights > 0) need.set(stockKey('room', formRoomId), formNights);
     for (const c of editingReservation ? editingReservation.charges || [] : formVouchers) {
@@ -310,8 +324,28 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
       const inStay = (d: string) => nightly.some((n) => n.date === d);
       const stockQty = kind === 'room' ? roomStock.filter(inStay).length : stock ? qty : 0;
       const compQty = kind === 'room' ? hotelComps.filter((d) => inStay(d) && !roomStock.includes(d)).length : 0;
+      if (kind === 'room') {
+        // room: a cost per bought night (not complimentary, not from stock)
+        const buyN = nightly.filter((n) => !roomStock.includes(n.date) && !hotelComps.includes(n.date));
+        const roomCost = buyN.reduce((a, n) => a + (nightCosts[n.date] ?? 0), 0);
+        return {
+          key,
+          kind,
+          item,
+          qty,
+          compQty,
+          stockQty,
+          entered: buyN.every((n) => typeof nightCosts[n.date] === 'number'),
+          free: false,
+          unitCost: buyN.length ? roomCost / buyN.length : 0,
+          roomCost,
+          label: itemLabel({ kind, item }, casinoRates, en),
+          stock: false,
+          left,
+        };
+      }
       // every night complimentary / from stock → no price needed
-      const entered = stock || (cost !== null && cost !== undefined) || (kind === 'room' && compQty + stockQty > 0 && compQty + stockQty === qty);
+      const entered = stock || (cost !== null && cost !== undefined);
       return {
         key,
         kind,
@@ -322,21 +356,37 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
         entered,
         free: !stock && entered && !cost && compQty + stockQty < qty,
         unitCost: cost ?? 0,
+        roomCost: 0,
         label: itemLabel({ kind, item }, casinoRates, en),
         stock,
         left,
       };
     });
-  }, [formRoomId, formNights, editingReservation, formVouchers, buyCosts, voucherSource, stockLeft, hotelComps, roomStock, nightly, casinoRates, en]);
+  }, [formRoomId, formNights, editingReservation, formVouchers, buyCosts, voucherSource, stockLeft, hotelComps, roomStock, nightCosts, nightly, casinoRates, en]);
   const fromStock = buyLines.reduce((a, l) => a + l.stockQty, 0);
-  const buyCost = buyLines.reduce((a, l) => a + (l.qty - l.compQty - l.stockQty) * l.unitCost, 0);
+  const buyCost = buyLines.reduce((a, l) => a + (l.kind === 'room' ? l.roomCost : (l.qty - l.compQty - l.stockQty) * l.unitCost), 0);
   // Source of one room night: bought with the booking, from room stock, or complimentary (₱0)
   const pickNight = (date: string, to: 'buy' | 'stock' | 'free') => {
     setRoomStock((prev) => (to === 'stock' ? [...prev.filter((d) => d !== date), date] : prev.filter((d) => d !== date)));
     setHotelComps((prev) => (to === 'free' ? [...prev.filter((d) => d !== date), date] : prev.filter((d) => d !== date)));
-    // cost typed ₱0 = every night free: picking another source empties it so a price can be typed
-    if (to !== 'free' && roomBuy?.free) setBuyCost(roomBuy.key, null);
+    // back to Buy now with no cost: take the cost of a bought night with the same guest rate
+    if (to === 'buy' && typeof nightCosts[date] !== 'number') {
+      const rate = nightly.find((n) => n.date === date)?.listRate;
+      const same = nightly.find((n) => n.date !== date && n.listRate === rate && typeof nightCosts[n.date] === 'number' && !roomStock.includes(n.date) && !hotelComps.includes(n.date));
+      if (same) setNightCosts((prev) => ({ ...prev, [date]: prev[same.date] }));
+    }
   };
+  // hotel cost of one night; other bought nights with the same guest rate follow it while they are
+  // empty or still hold this night's previous cost (pre-filled) — each can still be changed on its own
+  const setNightCost = (date: string, cost: number | null) =>
+    setNightCosts((prev) => {
+      const rate = nightly.find((n) => n.date === date)?.listRate;
+      const next = { ...prev, [date]: cost };
+      for (const n of nightly)
+        if (n.date !== date && n.listRate === rate && !roomStock.includes(n.date) && !hotelComps.includes(n.date) && (typeof prev[n.date] !== 'number' || prev[n.date] === prev[date]))
+          next[n.date] = cost;
+      return next;
+    });
   const useBuy = !!setPurchases;
   // older booking, nothing typed in the Hotel column → leave it without a hotel purchase
   const buySkipped = noLink && buyLines.every((l) => l.stock || !l.entered);
@@ -395,8 +445,19 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
   const syncLinkedPurchase = (res: Reservation) => {
     if (!setPurchases) return;
     const id = linkedPurchaseId(res.id);
-    const items = buyLines.filter((l) => !l.stock).flatMap((l) =>
-      [
+    const items = buyLines.filter((l) => !l.stock).flatMap((l): PurchaseItem[] =>
+      l.kind === 'room'
+        ? (() => {
+            // one line per cost (complimentary = ₱0), each with its nights; stock nights are left out
+            const byCost = new Map<number, string[]>();
+            for (const n of nightly) {
+              if (roomStock.includes(n.date)) continue;
+              const c = hotelComps.includes(n.date) ? 0 : nightCosts[n.date] ?? 0;
+              byCost.set(c, [...(byCost.get(c) || []), n.date]);
+            }
+            return [...byCost].map(([unitCost, dates]) => ({ id: uid(), kind: l.kind, item: l.item, qty: dates.length, unitCost, dates }));
+          })()
+        : [
         { id: uid(), kind: l.kind, item: l.item, qty: l.qty - l.compQty - l.stockQty, unitCost: l.unitCost },
         { id: uid(), kind: l.kind, item: l.item, qty: l.compQty, unitCost: 0 },
       ].filter((i) => i.qty > 0)
@@ -1133,7 +1194,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                     </thead>
                     <tbody>
                       {nightly.map((n, i) => {
-                        const hotelComp = !!roomBuy && (roomBuy.free || hotelComps.includes(n.date));
+                        const hotelComp = !!roomBuy && hotelComps.includes(n.date);
                         return (
                           <tr key={n.date} className="text-[12.5px] !bg-info-soft/60">
                             <td>
@@ -1159,7 +1220,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                                 ) : hotelComp ? (
                                   <span className="text-ok text-[11.5px]">{en ? 'Complimentary' : '무료'}</span>
                                 ) : (
-                                  peso(roomBuy.unitCost)
+                                  peso(nightCosts[n.date] ?? 0)
                                 )}
                               </td>
                             )}
@@ -1397,7 +1458,7 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                     {/* room: one line per night — the first carries the room type, one hotel cost box spans all nights */}
                     {nightly.map((n, i) => {
                       const natWeekend = n.kind === 'weekend';
-                      const hotelComp = !!roomBuy && (roomBuy.free || hotelComps.includes(n.date));
+                      const hotelComp = !!roomBuy && hotelComps.includes(n.date);
                       const date = (
                         <span className="whitespace-nowrap">
                           <span className="text-ink-2">{formatLongDate(n.date)}</span>{' '}
@@ -1438,26 +1499,27 @@ export const GuestReservationLedger: React.FC<GuestReservationLedgerProps> = ({
                               <SourceSelect en={en} value={roomStock.includes(n.date) ? 'stock' : hotelComp ? 'free' : 'buy'} onPick={(to) => pickNight(n.date, to)} />
                             )}
                           </td>
-                          {i === 0 && (
-                            <td rowSpan={nightly.length} className={`${HC} c`}>
-                              {useBuy && roomBuy ? (
-                                roomBuy.stockQty >= roomBuy.qty ? (
-                                  <StockBadge en={en} qty={roomBuy.stockQty} left={roomBuy.left} />
-                                ) : (
-                                  <>
-                                    <HotelCostInput en={en} line={{ ...roomBuy, qty: roomBuy.qty - roomBuy.stockQty }} onCost={setBuyCost} warn={buyTried} />
-                                    {roomBuy.stockQty > 0 && (
-                                      <div className={`text-[10.5px] mt-1 ${roomBuy.left >= roomBuy.stockQty ? 'text-muted' : 'text-warn'}`}>
-                                        {en ? `+ ${roomBuy.stockQty} from stock · ${Math.max(roomBuy.left, 0)} left` : `+ 재고 ${roomBuy.stockQty} · 남은 ${Math.max(roomBuy.left, 0)}`}
-                                      </div>
-                                    )}
-                                  </>
-                                )
-                              ) : (
-                                <span className="text-faint">—</span>
-                              )}
-                            </td>
-                          )}
+                          <td className={`${HC} c`}>
+                            {!useBuy || !roomBuy ? (
+                              <span className="text-faint">—</span>
+                            ) : roomStock.includes(n.date) ? (
+                              <span
+                                className={`badge ${roomBuy.left >= roomBuy.stockQty ? 'badge-info' : 'badge-warn'} w-[108px] mx-auto justify-center h-7 num`}
+                                title={en ? 'Taken from room-nights already bought from the hotel (Hotel Purchases) — no new cost' : '이미 구매한 객실 사용 — 추가 원가 없음'}
+                              >
+                                {en ? `${Math.max(roomBuy.left, 0)} in stock` : `재고 ${Math.max(roomBuy.left, 0)}`}
+                              </span>
+                            ) : hotelComp ? (
+                              <span className="badge badge-ok w-[108px] mx-auto justify-center h-7">{en ? 'Free' : '무료'}</span>
+                            ) : (
+                              <HotelCostInput
+                                en={en}
+                                line={{ ...roomBuy, key: n.date, qty: 1, compQty: 0, free: false, entered: typeof nightCosts[n.date] === 'number', unitCost: nightCosts[n.date] ?? 0 }}
+                                onCost={setNightCost}
+                                warn={buyTried}
+                              />
+                            )}
+                          </td>
                           {/* guest */}
                           <td className={`${GC} c ${G}`}>
                             <input

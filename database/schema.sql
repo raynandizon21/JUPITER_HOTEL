@@ -380,6 +380,7 @@ CREATE TABLE IF NOT EXISTS `hotel_purchase_items` (
   `ITEM_CODE`    VARCHAR(50)   NOT NULL COMMENT 'room_types.ROOM_CODE, or breakfast / dinner / extraBed',
   `QTY`          INT           NOT NULL COMMENT 'room-nights or vouchers',
   `UNIT_COST`    DECIMAL(12,2) NOT NULL COMMENT 'wholesale price per unit',
+  `NIGHT_DATES`  TEXT          NULL COMMENT 'room line bought with a booking: its nights (YYYY-MM-DD, comma-separated)',
   `AMOUNT`       DECIMAL(12,2) AS (`QTY` * `UNIT_COST`) STORED,
   PRIMARY KEY (`IDNo`),
   KEY `idx_purchase_items_purchase` (`PURCHASE_ID`),

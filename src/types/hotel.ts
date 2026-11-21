@@ -103,6 +103,8 @@ export interface PurchaseItem {
   qty: number;
   /** wholesale price Jupiter pays the hotel per unit (room-night / voucher); 0 = given free by the hotel */
   unitCost: number;
+  /** room line bought with a booking (`buy-<id>`): the nights it covers (older lines have none) */
+  dates?: string[];
 }
 
 /** Stock Jupiter buys from the hotel at the wholesale rate. Guest bookings and voucher sales use it up. */

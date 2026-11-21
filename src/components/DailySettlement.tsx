@@ -3,12 +3,13 @@ import { FileSpreadsheet, Receipt, CalendarDays, BedDouble, Ticket, ChevronLeft,
 import { CasinoRatesConfig, FolioCharge, HotelPurchase, Reservation, VoucherSale } from '../types/hotel';
 import { usePurchases } from './StockContext';
 import { chargeAmount, folioOf, peso, voucherTotals } from '../utils/billing';
-import { chargeStockItem } from '../utils/inventory';
+import { chargeStockItem, roomIdOf } from '../utils/inventory';
 import { addDays, formatLongDate, formatShortDate, formatMonth, getDaysInMonth, getDayCategory, getNightlyRates, getStayNights } from '../utils/hotelHelpers';
 import { Language } from '../i18n/translations';
 import { PageHeader, Dialog, Pager, toast } from './ui';
 import { GuestFolio } from './GuestFolio';
 import { DateFilter } from './DateFilter';
+import { HotelBillDay } from './HotelBillingReport';
 
 interface Props {
   reservations: Reservation[];
@@ -45,6 +46,12 @@ export interface DailyRow {
   extrasQty: number; // pieces of buffet / vouchers / extras charged on this day (with a booking)
   extrasList: string; // breakdown for the tooltip, e.g. "Breakfast voucher × 3"
   voucherQty: number; // pieces of the voucher-only purchases that day
+  hotelBill: number; // main table "Hotel bill": Hotel Purchases dated this day (= Hotel Billing Report day)
+  hotelBillRooms: number; // room-nights bought that day
+  hotelBillVouchers: number; // vouchers bought that day
+  guestBill: number; // main table "Guest bill": guests' value of this day (rooms + extras) + vouchers-only sales
+  guestPaid: number; // of guestBill, paid (bookings: earliest days first; vouchers only: what was paid)
+  guestUnpaid: number; // guestBill − guestPaid
 }
 
 export type DayShare = { total: number; paid: number; room: number; extras: number };
@@ -93,20 +100,52 @@ export function buildDailyRows(reservations: Reservation[], month: string, vouch
 }
 
 /**
- * Hotel rate per night of one booking, from the purchase saved with it (`buy-<bookingId>`):
- * paid nights at the unit cost, complimentary nights (₱0 lines) on the first nights — same as the form.
- * Bookings without a hotel cost give nothing.
+ * Unit cost of stock bought ahead (Hotel Purchases → New Purchase, not saved with a booking / voucher sale):
+ * weighted average of the paid lines of that item (null = never bought ahead at a cost).
  */
-export function hotelNights(r: Reservation, purchases: HotelPurchase[]): Map<string, number> {
+export function stockUnitCost(kind: 'room' | 'voucher', item: string, purchases: HotelPurchase[]): number | null {
+  let qty = 0;
+  let cost = 0;
+  for (const p of purchases)
+    if (!p.id.startsWith('buy-'))
+      for (const i of p.items)
+        if (i.kind === kind && i.item === item && i.unitCost > 0) {
+          qty += i.qty;
+          cost += i.qty * i.unitCost;
+        }
+  return qty ? Math.round(cost / qty) : null;
+}
+
+/**
+ * Hotel rate per night of one booking, from the purchase saved with it (`buy-<bookingId>`): per night when
+ * its lines have dates; older lines: complimentary nights (₱0 lines) first, then paid nights at the unit cost — same as the form.
+ * The other nights came from room stock: they cost the stock's unit cost (`stockUnitCost`), if known.
+ */
+export function hotelNights(r: Reservation, purchases: HotelPurchase[], rates?: CasinoRatesConfig): Map<string, number> {
   const m = new Map<string, number>();
   const p = purchases.find((x) => x.id === `buy-${r.id}`);
   const rooms = (p?.items || []).filter((i) => i.kind === 'room');
-  if (!rooms.length) return m;
+  // saved per night (newer bookings): each line knows its nights; other nights came from stock
+  if (rooms.length && rooms.every((i) => i.dates?.length)) {
+    const roomId = rates ? roomIdOf(r, rates) : null;
+    const stock = roomId ? stockUnitCost('room', roomId, purchases) : null;
+    for (const d of getStayNights(r.checkIn, r.checkOut)) {
+      const line = rooms.find((i) => i.dates!.includes(d));
+      if (line) m.set(d, line.unitCost);
+      else if (stock !== null) m.set(d, stock);
+    }
+    return m;
+  }
   const comp = rooms.filter((i) => !i.unitCost).reduce((a, i) => a + i.qty, 0);
   const paid = rooms.filter((i) => i.unitCost > 0).reduce((a, i) => a + i.qty, 0);
   const cost = rooms.find((i) => i.unitCost > 0)?.unitCost ?? 0;
-  // order: complimentary nights, bought nights, then nights from room stock (bought earlier — no cost here)
-  getStayNights(r.checkIn, r.checkOut).forEach((d, i) => i < comp + paid && m.set(d, i < comp ? 0 : cost));
+  const roomId = rates ? roomIdOf(r, rates) : null;
+  const stock = roomId ? stockUnitCost('room', roomId, purchases) : null;
+  // order: complimentary nights, bought nights, then nights from room stock (bought earlier)
+  getStayNights(r.checkIn, r.checkOut).forEach((d, i) => {
+    if (i < comp + paid) m.set(d, i < comp ? 0 : cost);
+    else if (stock !== null) m.set(d, stock);
+  });
   return m;
 }
 
@@ -117,17 +156,23 @@ function pieces(list: FolioCharge[]): string {
   return [...m].map(([d, q]) => `${d} × ${q}`).join('\n');
 }
 
-/** Hotel cost of one voucher line, from the purchase saved with its booking / voucher sale (null = no cost entered). */
+/**
+ * Hotel cost of one voucher line, from the purchase saved with its booking / voucher sale;
+ * a voucher taken from stock costs the stock's unit cost (null = not a voucher / no cost known).
+ */
 export function voucherHotelCost(c: FolioCharge, buyId: string, purchases: HotelPurchase[]): number | null {
   const v = chargeStockItem(c);
-  const line = v ? purchases.find((p) => p.id === buyId)?.items.find((i) => i.kind === 'voucher' && i.item === v) : undefined;
-  return line ? c.qty * line.unitCost : null;
+  if (!v) return null;
+  const line = purchases.find((p) => p.id === buyId)?.items.find((i) => i.kind === 'voucher' && i.item === v);
+  if (line) return c.qty * line.unitCost;
+  const stock = stockUnitCost('voucher', v, purchases);
+  return stock === null ? null : c.qty * stock;
 }
 
 /** Same as buildDailyRows, for any list of dates (the Date / Date Range filter). */
 export function buildDailyRowsFor(reservations: Reservation[], dates: string[], voucherSales: VoucherSale[] = [], rates?: CasinoRatesConfig, purchases: HotelPurchase[] = []): DailyRow[] {
   const shares = rates ? reservations.map((r) => bookingDays(r, rates)) : null;
-  const hotel = reservations.map((r) => hotelNights(r, purchases));
+  const hotel = reservations.map((r) => hotelNights(r, purchases, rates));
   return dates.map((date) => {
     const arriving = reservations.filter((r) => r.checkIn === date);
     const folios = arriving.map(folioOf);
@@ -155,6 +200,10 @@ export function buildDailyRowsFor(reservations: Reservation[], dates: string[], 
     // vouchers of this day: with a booking (charge date) and vouchers-only (purchase date)
     const bookingVouchers = reservations.flatMap((r) => (r.charges || []).filter((c) => c.date === date && chargeStockItem(c)).map((c) => ({ c, buyId: `buy-${r.id}` })));
     const vCosts = [...bookingVouchers, ...sold.flatMap((v) => v.items.map((c) => ({ c, buyId: `buy-${v.id}` })))].map((x) => voucherHotelCost(x.c, x.buyId, purchases)).filter((x): x is number => x !== null);
+    const bought = purchases.filter((p) => p.date === date).flatMap((p) => p.items);
+    const dayValue = shares ? dayTotal : folios.reduce((a, f) => a + f.total, 0);
+    const dayValuePaid = shares ? dayPaid : folios.reduce((a, f) => a + f.paid, 0);
+    const soldPaid = sold.reduce((a, v) => a + Math.min(voucherTotals(v).paid, voucherTotals(v).total), 0);
     return {
       date,
       checkIns: arriving.length,
@@ -178,6 +227,12 @@ export function buildDailyRowsFor(reservations: Reservation[], dates: string[], 
       extrasQty: dayCharges.reduce((a, c) => a + c.qty, 0),
       extrasList: pieces(dayCharges),
       voucherQty: sold.reduce((a, v) => a + v.items.reduce((b, c) => b + c.qty, 0), 0),
+      hotelBill: bought.reduce((a, i) => a + i.qty * i.unitCost, 0),
+      hotelBillRooms: bought.filter((i) => i.kind === 'room').reduce((a, i) => a + i.qty, 0),
+      hotelBillVouchers: bought.filter((i) => i.kind === 'voucher').reduce((a, i) => a + i.qty, 0),
+      guestBill: dayValue + voucherAmount,
+      guestPaid: dayValuePaid + soldPaid,
+      guestUnpaid: dayValue - dayValuePaid + voucherAmount - soldPaid,
     };
   });
 }
@@ -233,6 +288,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
             : 'sold');
   };
   const [folioId, setFolioId] = useState<string | null>(null);
+  const [billDay, setBillDay] = useState<string | null>(null); // Hotel bill pop-up (hotel-sheet format)
   const [exporting, setExporting] = useState(false);
 
   const purchases = usePurchases();
@@ -245,7 +301,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
     const sum = (k: keyof DailyRow) => rows.reduce((a, r) => a + (r[k] as number), 0);
     // guests in the period = arrivals + those already in the room on its first day (each counted once)
     const guests = sum('checkIns') + (rows[0] ? rows[0].inHouse - rows[0].checkIns : 0);
-    return { checkIns: sum('checkIns'), guests, nights: sum('nights'), total: sum('total'), roomAmount: sum('roomAmount'), hotelAmount: sum('hotelAmount'), extrasQty: sum('extrasQty'), voucherQty: sum('voucherQty'), hotelAll: sum('hotelAll'), junketAll: sum('junketAll'), extrasAmount: sum('extrasAmount'), voucherAmount: sum('voucherAmount'), paid: sum('paid'), paidAmount: sum('paidAmount'), unpaid: sum('unpaid'), unpaidAmount: sum('unpaidAmount') };
+    return { checkIns: sum('checkIns'), guests, nights: sum('nights'), total: sum('total'), roomAmount: sum('roomAmount'), hotelAmount: sum('hotelAmount'), extrasQty: sum('extrasQty'), voucherQty: sum('voucherQty'), hotelAll: sum('hotelAll'), junketAll: sum('junketAll'), extrasAmount: sum('extrasAmount'), voucherAmount: sum('voucherAmount'), hotelBill: sum('hotelBill'), guestBill: sum('guestBill'), guestPaid: sum('guestPaid'), guestUnpaid: sum('guestUnpaid'), paid: sum('paid'), paidAmount: sum('paidAmount'), unpaid: sum('unpaid'), unpaidAmount: sum('unpaidAmount') };
   }, [rows]);
 
   // "주피터고객이 사용중인객실" — rooms in use today (or on the 1st day of a past/future month)
@@ -328,17 +384,14 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
 
         <div ref={areaRef} className="flex-1 min-h-[200px] overflow-y-auto">
           <table className="dtable compact table-fixed">
-            {/* date, rooms and the two "amount + pcs" columns get a set width; the 5 money columns share the rest */}
+            {/* date and rooms get a set width; the 4 money columns share the rest */}
             <colgroup>
-              <col className="w-[140px]" />
-              <col className="w-[128px]" />
+              <col className="w-[150px]" />
               <col className="w-[150px]" />
               <col />
               <col />
               <col />
               <col />
-              <col />
-              <col className="w-[160px]" />
             </colgroup>
             <thead>
               <tr>
@@ -350,31 +403,10 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                       (check-in list)
                     </>
                   } tip={en ? 'Rooms used that night: guests who arrived + guests still staying (1 booking = 1 room)' : '이날 밤 사용 객실: 도착 + 계속 투숙 (예약 1건 = 객실 1개)'} />
-                <H tone="info" ko="뷔페·추가" enLabel="Buffet / extras" align="r" tip={en ? 'Vouchers, extra bed and other charges on this day (with a room booking)' : '이날 바우처·엑스트라 베드 등 추가 요금 (객실 예약 포함)'} />
-                <H
-                  tone="info"
-                  ko="총 금액"
-                  enLabel="Total amount"
-                  align="r"
-                  tip={en ? 'Room + buffet / extras of this day (= paid + unpaid)' : '객실 + 뷔페·추가 (= 결제 + 미결제)'}
-                />
-                <H tone="ok" ko="결제 금액" enLabel="Paid amount" align="r" tip={en ? 'All money received that day, including partial payments' : '부분 결제 포함 받은 금액'} />
-                <H tone="bad" ko="미결제 금액" enLabel="Unpaid amount" align="r" />
-                <H
-                  tone="violet"
-                  ko="호텔 요금"
-                  enLabel="Hotel rate"
-                  align="r"
-                  tip={en ? 'What Jupiter pays the hotel for this day: room nights + vouchers (bookings and vouchers only, hotel cost saved with each)' : '이날 주피터가 호텔에 지불하는 금액: 숙박 + 바우처 (예약·바우처 단독, 입력한 호텔 원가)'}
-                />
-                <H tone="info" ko="정킷 요금" enLabel="Junket rate" align="r" tip={en ? 'What guests pay for this day: room nights + vouchers (bookings and vouchers only)' : '이날 손님 요금: 숙박 + 바우처 (예약·바우처 단독)'} />
-                <H
-                  tone="warn"
-                  ko="바우처 판매"
-                  enLabel="Vouchers sold"
-                  align="r"
-                  tip={en ? 'Vouchers bought without a room booking, by purchase date — for the record (not in the totals)' : '객실 예약 없이 구매한 바우처 (구매일 기준, 기록용 · 합계 미포함)'}
-                />
+                <H tone="violet" ko="호텔 총 청구액" enLabel="Hotel total bill" align="r" tip={en ? 'What the hotel bills Jupiter for this day: Hotel Purchases dated this day (same as the Hotel Billing Report)' : '이날 호텔이 주피터에 청구하는 금액: 이날 호텔 구매 (호텔 청구 보고서와 동일)'} />
+                <H tone="info" ko="손님 총 청구액" enLabel="Guest total bill" align="r" tip={en ? 'What guests are billed for this day: room nights + buffet / extras + vouchers-only sales (= paid + unpaid)' : '이날 손님 청구액: 숙박 + 뷔페·추가 + 바우처 단독 판매 (= 결제 + 미결제)'} />
+                <H tone="ok" ko="결제 금액 (손님)" enLabel="Paid amount (guest)" align="r" tip={en ? 'Part of the guest bill of this day that is paid' : '이날 손님 청구액 중 결제된 금액'} />
+                <H tone="bad" ko="미결제 금액 (손님)" enLabel="Unpaid amount (guest)" align="r" tip={en ? 'Part of the guest bill of this day not paid yet' : '이날 손님 청구액 중 미결제 금액'} />
               </tr>
             </thead>
             <tbody>
@@ -386,6 +418,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                 const wknd = getDayCategory(r.date) === 'weekend';
                 const isToday = r.date === todayISO;
                 const z = (v: number, ko: string) => (v ? <span>{unit(v, ko)}</span> : <span className="text-faint">—</span>);
+                const dash = <span className="text-faint">—</span>;
                 return (
                   <tr
                     key={r.date}
@@ -412,17 +445,26 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                         z(0, '건')
                       )}
                     </td>
-                    <td className="r num bg-accent-soft/30 whitespace-nowrap" title={r.extrasList || undefined}>
-                      {r.extrasAmount || r.extrasQty ? (
-                        <>
-                          <Pcs n={r.extrasQty} en={en}>{peso(r.extrasAmount)}</Pcs>
-                        </>
+                    <td
+                      className="r num bg-violet-soft/30 whitespace-nowrap"
+                      title={r.hotelBillRooms || r.hotelBillVouchers ? (en ? `${r.hotelBillRooms} room-nights · ${r.hotelBillVouchers} vouchers bought` : `객실 ${r.hotelBillRooms}박 · 바우처 ${r.hotelBillVouchers}개 구매`) : undefined}
+                    >
+                      {r.hotelBillRooms || r.hotelBillVouchers ? (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setBillDay(r.date);
+                          }}
+                          className="num font-semibold text-violet cursor-pointer underline decoration-dotted underline-offset-4 hover:decoration-solid"
+                        >
+                          {r.hotelBill ? peso(r.hotelBill) : en ? 'Complimentary' : '무료'}
+                        </button>
                       ) : (
-                        <span className="text-faint">—</span>
+                        dash
                       )}
                     </td>
                     <td className="r num bg-accent-soft/30 whitespace-nowrap">
-                      {r.total > 0 ? (
+                      {r.guestBill ? (
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -431,46 +473,17 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                           className="num font-semibold text-ink cursor-pointer underline decoration-dotted underline-offset-4 hover:decoration-solid"
                           title={en ? 'Show the bookings of this day' : '이날 예약 보기'}
                         >
-                          {peso(r.total)}
+                          {peso(r.guestBill)}
                         </button>
                       ) : (
-                        <span className="text-faint">—</span>
+                        dash
                       )}
                     </td>
                     <td className="r bg-ok-soft/30">
-                      {!r.total ? <span className="text-faint">—</span> : r.paidAmount ? <Link value={peso(r.paidAmount)} tone="ok" onClick={() => open(r.date, 'all')} /> : <span className="num text-muted">{peso(0)}</span>}
+                      {!r.guestBill ? dash : r.guestPaid ? <Link value={peso(r.guestPaid)} tone="ok" onClick={() => open(r.date, 'all')} /> : <span className="num text-muted">{peso(0)}</span>}
                     </td>
                     <td className="r bg-bad-soft/30">
-                      {!r.total ? <span className="text-faint">—</span> : r.unpaidAmount ? <Link value={peso(r.unpaidAmount)} tone="bad" onClick={() => open(r.date, 'unpaid')} /> : <span className="num text-muted">{peso(0)}</span>}
-                    </td>
-                    <td className="r num bg-violet-soft/30 whitespace-nowrap">{!r.hotelAllKnown ? (
-                        <span className="text-faint">—</span>
-                      ) : r.hotelAll ? (
-                        peso(r.hotelAll)
-                      ) : (
-                        <span className="text-ok text-[11.5px] font-medium">{en ? 'Complimentary' : '무료'}</span>
-                      )}</td>
-                    <td className="r num bg-accent-soft/30 whitespace-nowrap">{r.junketAll ? peso(r.junketAll) : <span className="text-faint">—</span>}</td>
-                    <td
-                      className="r bg-warn-soft/30 whitespace-nowrap"
-                      title={
-                        r.vouchers
-                          ? voucherSales
-                              .filter((v) => v.date === r.date)
-                              .map((v) => `${v.guestName}: ${v.items.map((c) => `${c.description} × ${c.qty}`).join(', ')} = ${peso(voucherTotals(v).total)}`)
-                              .join('\n')
-                          : undefined
-                      }
-                    >
-                      {r.vouchers ? (
-                        <>
-                          <Pcs n={r.voucherQty} en={en}>
-                            <span className="num font-semibold text-warn">{peso(r.voucherAmount)}</span>
-                          </Pcs>
-                        </>
-                      ) : (
-                        <span className="text-faint">—</span>
-                      )}
+                      {!r.guestBill ? dash : r.guestUnpaid ? <Link value={peso(r.guestUnpaid)} tone="bad" onClick={() => open(r.date, 'unpaid')} /> : <span className="num text-muted">{peso(0)}</span>}
                     </td>
                   </tr>
                 );
@@ -486,22 +499,17 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
                 <td className="r num" title={en ? 'Guests in the room during this period (each counted once)' : '기간 중 투숙 손님 수 (중복 제외)'}>
                   {t.guests || '—'}
                 </td>
-                <td className="r num whitespace-nowrap">
-                  <Pcs n={t.extrasQty} en={en}>{peso(t.extrasAmount)}</Pcs>
-                </td>
-                <td className="r num text-ink">{peso(t.total)}</td>
-                <td className="r num text-ok">{peso(t.paidAmount)}</td>
-                <td className="r num text-bad">{peso(t.unpaidAmount)}</td>
-                <td className="r num text-violet">{peso(t.hotelAll)}</td>
-                <td className="r num">{peso(t.junketAll)}</td>
-                <td className="r num whitespace-nowrap text-warn">
-                  <Pcs n={t.voucherQty} en={en}>{t.voucherAmount ? peso(t.voucherAmount) : '—'}</Pcs>
-                </td>
+                <td className="r num text-violet">{peso(t.hotelBill)}</td>
+                <td className="r num text-ink">{peso(t.guestBill)}</td>
+                <td className="r num text-ok">{peso(t.guestPaid)}</td>
+                <td className="r num text-bad">{peso(t.guestUnpaid)}</td>
               </tr>
             </tfoot>
           </table>
         </div>
       </div>
+
+      {billDay && <HotelBillDay date={billDay} purchases={purchases} rates={casinoRates} en={en} onClose={() => setBillDay(null)} />}
 
       {selectedDate && (() => {
         const nightNo = (r: Reservation) => Math.round((Date.parse(selectedDate) - Date.parse(r.checkIn)) / 86400000) + 1;
@@ -531,7 +539,7 @@ export const DailySettlement: React.FC<Props> = ({ reservations, setReservations
         const cur = Math.min(dayPage, pages - 1);
 
         const shareOf = (res: Reservation) => dayShares.get(res.id)?.get(selectedDate) || { total: 0, paid: 0, room: 0, extras: 0 };
-        const hotelOf = (res: Reservation) => hotelNights(res, purchases).get(selectedDate);
+        const hotelOf = (res: Reservation) => hotelNights(res, purchases, casinoRates).get(selectedDate);
         const guestRow = (res: Reservation) => {
           const share = shareOf(res);
           const hotelCost = hotelOf(res);
@@ -838,11 +846,3 @@ const Link: React.FC<{ value: string; tone: 'ok' | 'bad'; onClick: () => void }>
   ) : (
     <span className="text-faint">—</span>
   );
-
-/** An amount with its piece count after it, on one line ("₱14,500 20 pcs"). */
-const Pcs: React.FC<{ n: number; en: boolean; children: React.ReactNode }> = ({ n, en, children }) => (
-  <span className="whitespace-nowrap">
-    {children}
-    {n > 0 && <span className="ml-1.5 text-[11px] font-normal text-muted">{en ? `${n} ${n === 1 ? 'pc' : 'pcs'}` : `${n}개`}</span>}
-  </span>
-);
